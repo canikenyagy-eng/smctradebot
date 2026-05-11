@@ -210,6 +210,38 @@ class Settings:
     allow_live_dynamic_threshold: bool
     enable_feature_analytics: bool
     export_meta_report: bool
+    
+    # Prop Risk Engine v2 (Week 5)
+    enable_regime_engine_v2: bool
+    enable_prop_risk_v2: bool
+    enable_portfolio_risk_v2: bool
+    enable_trade_gate_v2: bool
+    enable_execution_quality_model: bool
+    
+    # Prop Risk v2 Settings
+    prop_base_risk: float
+    prop_max_risk: float
+    prop_dd_threshold_low: float
+    prop_dd_threshold_mid: float
+    prop_dd_threshold_high: float
+    prop_loss_2_reduction: float
+    prop_loss_3_reduction: float
+    prop_loss_4_pause: bool
+    
+    # Portfolio v2 Settings
+    portfolio_max_currency_exposure: int
+    portfolio_max_currency_gross: int
+    portfolio_correlation_threshold: float
+    portfolio_max_cluster: int
+    portfolio_max_net_direction: int
+    
+    # Trade Gate Settings
+    gate_min_regime_tradability: int
+    gate_block_transition: bool
+    
+    # Execution Quality Settings
+    execution_base_slippage: float
+    execution_max_multiplier: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -320,4 +352,36 @@ class Settings:
             allow_live_dynamic_threshold=_parse_bool(os.getenv("ALLOW_LIVE_DYNAMIC_THRESHOLD", "0"), default=False),
             enable_feature_analytics=_parse_bool(os.getenv("ENABLE_FEATURE_ANALYTICS", "0"), default=False),
             export_meta_report=_parse_bool(os.getenv("EXPORT_META_REPORT", "0"), default=False),
+            
+            # Prop Risk Engine v2 flags
+            enable_regime_engine_v2=_parse_bool(os.getenv("ENABLE_REGIME_ENGINE_V2", "0"), default=False),
+            enable_prop_risk_v2=_parse_bool(os.getenv("ENABLE_PROP_RISK_V2", "0"), default=False),
+            enable_portfolio_risk_v2=_parse_bool(os.getenv("ENABLE_PORTFOLIO_RISK_V2", "0"), default=False),
+            enable_trade_gate_v2=_parse_bool(os.getenv("ENABLE_TRADE_GATE_V2", "0"), default=False),
+            enable_execution_quality_model=_parse_bool(os.getenv("ENABLE_EXECUTION_QUALITY_MODEL", "0"), default=False),
+            
+            # Prop Risk v2 Settings
+            prop_base_risk=max(0.1, float(os.getenv("PROP_BASE_RISK", "1.0"))),
+            prop_max_risk=max(0.1, float(os.getenv("PROP_MAX_RISK", "2.0"))),
+            prop_dd_threshold_low=max(0.0, float(os.getenv("PROP_DD_THRESHOLD_LOW", "3.0"))),
+            prop_dd_threshold_mid=max(0.0, float(os.getenv("PROP_DD_THRESHOLD_MID", "6.0"))),
+            prop_dd_threshold_high=max(0.0, float(os.getenv("PROP_DD_THRESHOLD_HIGH", "10.0"))),
+            prop_loss_2_reduction=max(0.0, min(1.0, float(os.getenv("PROP_LOSS_2_REDUCTION", "0.8")))),
+            prop_loss_3_reduction=max(0.0, min(1.0, float(os.getenv("PROP_LOSS_3_REDUCTION", "0.6")))),
+            prop_loss_4_pause=_parse_bool(os.getenv("PROP_LOSS_4_PAUSE", "1"), default=True),
+            
+            # Portfolio v2 Settings
+            portfolio_max_currency_exposure=max(0, int(os.getenv("PORTFOLIO_MAX_CURRENCY_EXPOSURE", "2"))),
+            portfolio_max_currency_gross=max(0, int(os.getenv("PORTFOLIO_MAX_CURRENCY_GROSS", "4"))),
+            portfolio_correlation_threshold=max(0.0, min(0.99, float(os.getenv("PORTFOLIO_CORRELATION_THRESHOLD", "0.82")))),
+            portfolio_max_cluster=max(0, int(os.getenv("PORTFOLIO_MAX_CLUSTER", "3"))),
+            portfolio_max_net_direction=max(0, int(os.getenv("PORTFOLIO_MAX_NET_DIRECTION", "4"))),
+            
+            # Trade Gate Settings
+            gate_min_regime_tradability=max(0, min(100, int(os.getenv("GATE_MIN_REGIME_TRADABILITY", "30")))),
+            gate_block_transition=_parse_bool(os.getenv("GATE_BLOCK_TRANSITION", "1"), default=True),
+            
+            # Execution Quality Settings
+            execution_base_slippage=max(0.0, float(os.getenv("EXECUTION_BASE_SLIPPAGE", "0.5"))),
+            execution_max_multiplier=max(1.0, float(os.getenv("EXECUTION_MAX_MULTIPLIER", "2.0"))),
         )
