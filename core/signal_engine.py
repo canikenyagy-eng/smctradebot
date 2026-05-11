@@ -1343,6 +1343,7 @@ class SignalEngine:
                     side=signal.side,
                     regime_output=None,  # Will auto-classify
                     universe=universe,
+                    current_score=signal.score,
                 )
                 if not result.allowed:
                     self._log_rejection(

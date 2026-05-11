@@ -32,6 +32,12 @@ class TradeGateSettings:
     # Minimum tradability threshold
     min_regime_tradability: int = 30
     
+    # Minimum score threshold (new - institutional requirement)
+    min_score_threshold: float = 0.0  # Default 0.0 = allow all scores
+    
+    # Require score check
+    check_score_threshold: bool = True
+    
     # Require risk engine
     check_risk_engine: bool = True
     
@@ -51,6 +57,8 @@ class TradeGateSettings:
         return TradeGateSettings(
             enabled=self.enabled,
             min_regime_tradability=max(0, min(100, int(self.min_regime_tradability))),
+            min_score_threshold=max(0.0, min(100.0, float(self.min_score_threshold))),
+            check_score_threshold=self.check_score_threshold,
             check_risk_engine=self.check_risk_engine,
             check_portfolio=self.check_portfolio,
             block_transition=self.block_transition,
@@ -148,12 +156,20 @@ class TradeGateV2:
         side: str,
         regime_output: "RegimeOutput" | None = None,
         universe: set[str] | None = None,
+        current_score: float = 0.0,
     ) -> TradeGateResult:
         """
         Check if trade should be allowed.
         
         Returns TradeGateResult with allowed=True/False and reason.
         All conditions must pass for trade to be allowed.
+        
+        Args:
+            pair: Trading pair
+            side: BUY or SELL
+            regime_output: RegimeOutput from regime engine
+            universe: Set of trading pairs
+            current_score: Current signal score (0-100)
         """
         if not self.settings.enabled:
             # Build empty states when disabled
@@ -207,6 +223,18 @@ class TradeGateV2:
                 portfolio_state=portfolio_state,
                 session_state=session_state,
             )
+        
+        # === CHECK: Score threshold (institutional requirement) ===
+        if self.settings.check_score_threshold:
+            if current_score < self.settings.min_score_threshold:
+                return TradeGateResult(
+                    allowed=False,
+                    reason="score_below_threshold",
+                    risk_state=risk_state,
+                    regime_state=regime_state,
+                    portfolio_state=portfolio_state,
+                    session_state=session_state,
+                )
         
         # Check 2: Risk engine
         if self.settings.check_risk_engine and self.risk_engine:
