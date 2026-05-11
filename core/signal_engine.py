@@ -21,6 +21,7 @@ from core.portfolio import CurrencyExposureRecord, exposure_expiry, signal_curre
 from core.scoring import ScoreBreakdown, calculate_score_details, score_session_timing
 from core.shadow import ShadowFeatureContext, analyze_shadow_context
 from core.trade_management import build_trade_management_plan
+from core.trade_gate_v2 import TradeGateV2, TradeGateSettings
 from data.market_data import MarketDataClient
 from execution.news import NewsFilter
 from smc.liquidity import LiquidityContext, analyze_liquidity
@@ -153,6 +154,8 @@ class SignalEngine:
         apply_dynamic_threshold: bool = False,
         dynamic_threshold_backtest_only: bool = True,
         allow_live_dynamic_threshold: bool = False,
+        # Trade Gate v2
+        enable_trade_gate_v2: bool = False,
     ) -> None:
         self.market_data = market_data
         self.news_filter = news_filter
@@ -222,6 +225,21 @@ class SignalEngine:
             threshold=pair_correlation_threshold,
             lookback=correlation_lookback,
         )
+        
+        # Trade Gate v2
+        self._trade_gate = None
+        if enable_trade_gate_v2:
+            self._trade_gate = TradeGateV2(
+                settings=TradeGateSettings(
+                    enabled=True,
+                    min_regime_tradability=30,
+                    check_risk_engine=False,  # Risk engine not wired yet
+                    check_portfolio=False,  # Portfolio checks already done above
+                    check_session=True,
+                    block_transition=True,
+                )
+            )
+        
         self._pair_cooldown_until: dict[str, datetime] = {}
         self._bias_history: dict[tuple[str, str], list[datetime]] = {}
         self._currency_exposure_records: list[CurrencyExposureRecord] = []
@@ -1294,5 +1312,27 @@ class SignalEngine:
                 self._log_rejection(drop.pair, drop.stage, drop.reason, **drop.context)
                 continue
             released.append(candidate.signal)
-
+        
+        # Trade Gate v2 check BEFORE release
+        if self._trade_gate is not None:
+            filtered: list[TradeSignal] = []
+            for signal in released:
+                result = self._trade_gate.check_trade(
+                    pair=signal.symbol,
+                    side=signal.side,
+                    regime_output=None,  # Will auto-classify
+                    universe=universe,
+                )
+                if not result.allowed:
+                    self._log_rejection(
+                        signal.symbol,
+                        "trade_gate_v2",
+                        result.reason,
+                        regime_state=result.regime_state,
+                        session_state=result.session_state,
+                    )
+                    continue
+                filtered.append(signal)
+            released = filtered
+        
         return released
