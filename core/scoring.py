@@ -11,6 +11,105 @@ from smc.regime import RegimeState
 from smc.trigger import TriggerContext
 
 
+# Regime-based activation multipliers
+# Each SMC component has different weight per regime
+REGIME_COMPONENT_WEIGHTS = {
+    # (structure, liquidity, fvg, ob, trigger, mtf)
+    "trend_strong": {
+        "structure": 1.0,
+        "liquidity": 0.7,
+        "fvg": 1.0,
+        "ob": 1.0,
+        "trigger": 1.0,
+        "mtf": 1.0,
+    },
+    "trend_weak": {
+        "structure": 0.8,
+        "liquidity": 0.6,
+        "fvg": 0.8,
+        "ob": 0.9,
+        "trigger": 0.8,
+        "mtf": 0.9,
+    },
+    "range_tight": {
+        "structure": 0.3,
+        "liquidity": 0.5,
+        "fvg": 0.3,
+        "ob": 0.8,
+        "trigger": 0.3,
+        "mtf": 0.2,
+    },
+    "range_wide": {
+        "structure": 0.2,
+        "liquidity": 0.9,
+        "fvg": 0.2,
+        "ob": 0.3,
+        "trigger": 0.2,
+        "mtf": 0.1,
+    },
+    "expansion": {
+        "structure": 0.4,
+        "liquidity": 1.0,
+        "fvg": 0.5,
+        "ob": 0.4,
+        "trigger": 0.4,
+        "mtf": 0.3,
+    },
+    "transition": {
+        "structure": 0.0,
+        "liquidity": 0.0,
+        "fvg": 0.0,
+        "ob": 0.0,
+        "trigger": 0.0,
+        "mtf": 0.0,
+    },
+}
+
+
+def get_regime_multipliers(regime: str) -> dict[str, float]:
+    """Get component weight multipliers for given regime."""
+    return REGIME_COMPONENT_WEIGHTS.get(regime, REGIME_COMPONENT_WEIGHTS.get("transition", {}))
+
+
+def apply_regime_weights_to_breakdown(
+    breakdown: "ScoreBreakdown",
+    regime: str,
+) -> "ScoreBreakdown":
+    """Apply regime-adjusted weights to score breakdown."""
+    multipliers = get_regime_multipliers(regime)
+    
+    # Apply multipliers to relevant components
+    new_htf = int(breakdown.htf_alignment * multipliers.get("mtf", 0.0))
+    new_trigger = int(breakdown.trigger_confirmation * multipliers.get("trigger", 0.0))
+    new_liq = int(breakdown.liquidity_displacement * multipliers.get("liquidity", 0.0))
+    new_fvg = int(breakdown.fvg_alignment * multipliers.get("fvg", 0.0))
+    new_ob = int(breakdown.order_block_alignment * multipliers.get("ob", 0.0))
+    
+    # Recalculate total
+    new_total = (
+        new_htf + breakdown.regime_alignment + new_trigger + new_liq +
+        breakdown.premium_discount + breakdown.news_filter + breakdown.session_timing +
+        new_fvg + new_ob + breakdown.mitigation_alignment + breakdown.smt_alignment +
+        breakdown.shadow_bonus
+    )
+    
+    return ScoreBreakdown(
+        htf_alignment=new_htf,
+        regime_alignment=breakdown.regime_alignment,
+        trigger_confirmation=new_trigger,
+        liquidity_displacement=new_liq,
+        premium_discount=breakdown.premium_discount,
+        news_filter=breakdown.news_filter,
+        session_timing=breakdown.session_timing,
+        fvg_alignment=new_fvg,
+        order_block_alignment=new_ob,
+        mitigation_alignment=breakdown.mitigation_alignment,
+        smt_alignment=breakdown.smt_alignment,
+        shadow_bonus=breakdown.shadow_bonus,
+        total=new_total,
+    )
+
+
 @dataclass(frozen=True)
 class ScoreBreakdown:
     htf_alignment: int
@@ -96,12 +195,13 @@ def _score_regime_alignment(side: str, regime: RegimeState) -> int:
 
 
 def _score_trigger_confirmation(side: str, trigger: TriggerContext) -> int:
+    """Score trigger confirmation (kept for backward compatibility)."""
     side_dir = _side_direction(side)
     trigger_dir = trigger.direction.lower()
-
+    
     if trigger_dir == side_dir:
         return min(15, 7 + trigger.strength)
-
+    
     if trigger_dir == "neutral":
         base = 3 + min(4, trigger.strength // 4)
         if trigger.structure_event is not None:
@@ -109,8 +209,28 @@ def _score_trigger_confirmation(side: str, trigger: TriggerContext) -> int:
         if trigger.liquidity.sweep or trigger.liquidity.displacement:
             base += 2
         return min(15, base)
-
+    
     return 0
+
+
+def trigger_to_confidence(trigger: TriggerContext, side: str) -> float:
+    """
+    Convert trigger to probabilistic confidence (0-1).
+    
+    Instead of binary, returns confidence level.
+    """
+    side_dir = _side_direction(side)
+    trigger_dir = trigger.direction.lower()
+    
+    if trigger_dir == side_dir:
+        # Same direction - high confidence
+        return min(1.0, 0.5 + (trigger.strength / 30.0))
+    elif trigger_dir == "neutral":
+        # Neutral - medium confidence
+        return 0.3 + (trigger.strength / 50.0)
+    else:
+        # Opposing - no confidence
+        return 0.0
 
 
 def _score_liquidity_displacement(side: str, liquidity: LiquidityContext) -> int:
@@ -309,11 +429,49 @@ def calculate_score_details(
             total=raw_total,
         )
 
-    meta = {
-        "raw_components": raw_components,
-        "weighted_components": weighted_components,
-        "adaptive_weights": adaptive_meta,
-        "raw_total": raw_total,
-        "weighted_total": weighted_total,
-    }
-    return score, meta
+
+def calculate_score_regime_aware(
+    pair: str,
+    side: str,
+    htf_bias: str,
+    zone: str,
+    liquidity: LiquidityContext,
+    regime: RegimeState,
+    trigger: TriggerContext,
+    news: NewsAssessment,
+    signal_time: datetime,
+    shadow: ShadowFeatureContext | None = None,
+    adaptive_weights: AdaptiveWeightSettings | None = None,
+) -> tuple[ScoreBreakdown, ScoreBreakdown]:
+    """
+    Calculate score with regime-aware weighting.
+    
+    Returns tuple: (raw_breakdown, regime_adjusted_breakdown)
+    
+    Raw: original scoring without regime adjustments
+    Adjusted: scoring with regime component weights applied
+    """
+    # Get base scoring
+    raw_breakdown, details = calculate_score_details(
+        pair=pair,
+        side=side,
+        htf_bias=htf_bias,
+        zone=zone,
+        liquidity=liquidity,
+        regime=regime,
+        trigger=trigger,
+        news=news,
+        signal_time=signal_time,
+        shadow=shadow,
+        adaptive_weights=adaptive_weights,
+    )
+    
+    # Get regime label
+    regime_label = regime.label.lower() if regime else "neutral"
+    if regime_label not in REGIME_COMPONENT_WEIGHTS:
+        regime_label = "neutral"
+    
+    # Apply regime weights
+    adjusted_breakdown = apply_regime_weights_to_breakdown(raw_breakdown, regime_label)
+    
+    return raw_breakdown, adjusted_breakdown
