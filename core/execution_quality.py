@@ -3,7 +3,9 @@ Execution Quality Adjustment Layer
 
 Applies regime-based execution quality to backtest simulation:
 - Slippage model adjustment
+- Spread model adjustment
 - Fill probability adjustment
+- Execution delay simulation
 - Effective execution price adjustment
 
 This ONLY applies in BACKTEST mode - no live effect.
@@ -11,6 +13,7 @@ This ONLY applies in BACKTEST mode - no live effect.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from core.regime_engine_v2 import RegimeOutput, RegimeType
@@ -25,6 +28,23 @@ REGIME_EXECUTION_QUALITY: dict[str, float] = {
     RegimeType.EXPANSION.value: 0.7,
     RegimeType.TRANSITION.value: 0.4,
 }
+
+# Base spread per pair (pips)
+PAIR_BASE_SPREAD: dict[str, float] = {
+    "EURUSD": 0.1,
+    "GBPUSD": 0.2,
+    "USDJPY": 0.2,
+    "USDCHF": 0.3,
+    "AUDUSD": 0.3,
+    "USDCAD": 0.3,
+    "NZDUSD": 0.3,
+    "EURGBP": 0.3,
+    "EURJPY": 0.4,
+    "GBPJPY": 0.4,
+}
+
+# Low liquidity hours (UTC)
+LOW_LIQUIDITY_HOURS = {0, 1, 2, 3, 4, 5}
 
 
 @dataclass(frozen=True)
@@ -47,6 +67,12 @@ class ExecutionQualitySettings:
     # Apply to market orders
     apply_to_market: bool = True
     
+    # Execution delay (bars)
+    execution_delay_bars: int = 0
+    
+    # Spread adjustment multiplier
+    spread_multiplier: float = 1.5
+    
     def sanitized(self) -> "ExecutionQualitySettings":
         return ExecutionQualitySettings(
             enabled=self.enabled,
@@ -55,6 +81,8 @@ class ExecutionQualitySettings:
             base_fill_probability=max(0.0, min(1.0, float(self.base_fill_probability))),
             apply_to_limits=self.apply_to_limits,
             apply_to_market=self.apply_to_market,
+            execution_delay_bars=max(0, int(self.execution_delay_bars)),
+            spread_multiplier=max(1.0, float(self.spread_multiplier)),
         )
 
 
@@ -65,10 +93,15 @@ class ExecutionQualityResult:
     fill_probability: float
     execution_price_adjustment: float
     
-    # Details
+    # Additional details
     base_slippage: float
     quality_multiplier: float
     regime: str
+    
+    # New fields
+    spread_pips: float
+    session_liquidity_factor: float
+    execution_delay_bars: int
 
 
 class ExecutionQualityLayer:
@@ -84,6 +117,7 @@ class ExecutionQualityLayer:
         self,
         regime: str,
         order_type: str = "market",  # "market" or "limit"
+        pair: str = "EURUSD",
     ) -> ExecutionQualityResult:
         """
         Compute execution quality for regime.
@@ -98,6 +132,9 @@ class ExecutionQualityLayer:
                 base_slippage=self.settings.base_slippage_pips,
                 quality_multiplier=1.0,
                 regime=regime,
+                spread_pips=PAIR_BASE_SPREAD.get(pair, 0.2),
+                session_liquidity_factor=1.0,
+                execution_delay_bars=0,
             )
         
         # Get regime quality
@@ -124,9 +161,18 @@ class ExecutionQualityLayer:
         fill_probability = base_fill * quality
         
         # Price adjustment (pips against trader)
-        execution_price_adjustment = adjusted_slippage * (
-            1.0 - quality
-        )
+        execution_price_adjustment = adjusted_slippage * (1.0 - quality)
+        
+        # NEW: Spread calculation
+        base_spread = PAIR_BASE_SPREAD.get(pair, 0.2)
+        spread_pips = base_spread * self.settings.spread_multiplier * (2.0 - quality)
+        
+        # NEW: Session liquidity factor
+        utc_hour = datetime.utcnow().hour
+        session_liquidity_factor = 0.6 if utc_hour in LOW_LIQUIDITY_HOURS else 1.0
+        
+        # Execution delay
+        delay_bars = self.settings.execution_delay_bars
         
         return ExecutionQualityResult(
             adjusted_slippage=round(adjusted_slippage, 4),
@@ -135,6 +181,9 @@ class ExecutionQualityLayer:
             base_slippage=base_slippage,
             quality_multiplier=round(quality_multiplier, 4),
             regime=regime,
+            spread_pips=round(spread_pips, 4),
+            session_liquidity_factor=round(session_liquidity_factor, 4),
+            execution_delay_bars=delay_bars,
         )
     
     def get_slippage_pips(
