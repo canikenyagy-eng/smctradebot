@@ -254,6 +254,48 @@ class PropRiskEngine:
             "risk_breakdown": self.state.get_risk_breakdown(),
         }
     
+    def get_risk_decision(self) -> dict[str, Any]:
+        """
+        Get structured risk decision for trade gate.
+        
+        Output format:
+        {
+            "risk_allowed": bool,
+            "risk_size": float,
+            "reason": "...",
+            "multiplier_breakdown": {...}
+        }
+        """
+        if not self.settings.enabled:
+            return {
+                "risk_allowed": True,
+                "risk_size": self.settings.base_risk,
+                "reason": "disabled",
+                "multiplier_breakdown": {"mode": "disabled"},
+            }
+        
+        if not self.state.can_trade():
+            dd = self.state.drawdown_r()
+            if dd >= self.settings.dd_threshold_high:
+                reason = f"high_drawdown_{dd:.1f}R"
+            elif self.state.paused:
+                reason = "paused_loss_streak"
+            else:
+                reason = "drawdown_limit"
+            return {
+                "risk_allowed": False,
+                "risk_size": 0.0,
+                "reason": reason,
+                "multiplier_breakdown": self.state.get_risk_breakdown(),
+            }
+        
+        return {
+            "risk_allowed": True,
+            "risk_size": self.state.base_risk_allowed(),
+            "reason": "",
+            "multiplier_breakdown": self.state.get_risk_breakdown(),
+        }
+    
     def reset(self) -> None:
         """Reset state."""
         self.state.reset()
