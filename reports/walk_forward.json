@@ -1,0 +1,40 @@
+{
+  "started_at": "2026-05-09T19:33:42.633883+00:00",
+  "finished_at": "2026-05-09T19:34:23.864923+00:00",
+  "parameters": {
+    "pairs": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "GBPJPY",
+      "AUDUSD",
+      "USDCAD",
+      "USDCHF",
+      "NZDUSD",
+      "EURJPY",
+      "EURGBP"
+    ],
+    "train_months": 6,
+    "test_months": 1,
+    "step_months": 1,
+    "ltf_timeframe": "M15",
+    "htf_timeframe": "H1",
+    "trigger_timeframe": "M5",
+    "global_start": "2026-04-24T03:35:00+00:00",
+    "global_end": "2026-05-08T20:00:00+00:00"
+  },
+  "summary": {
+    "window_count": 0,
+    "train_avg_win_rate": 0.0,
+    "test_avg_win_rate": 0.0,
+    "train_avg_profit_factor": 0.0,
+    "test_avg_profit_factor": 0.0,
+    "train_avg_r": 0.0,
+    "test_avg_r": 0.0,
+    "train_avg_drawdown_r": 0.0,
+    "test_avg_drawdown_r": 0.0,
+    "train_total_trades": 0,
+    "test_total_trades": 0
+  },
+  "windows": []
+}

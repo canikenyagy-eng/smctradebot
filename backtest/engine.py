@@ -1,0 +1,997 @@
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import mean, median
+from typing import Iterable
+import json
+import math
+
+import pandas as pd
+
+from backtest.execution import RealisticExecutionSettings, build_rng, volatility_slippage_factor
+from backtest.risk import ATRRiskSettings, EquityProtectionSettings, EquityProtectionState, atr_value_at
+from core.signal_engine import SignalEngine, SignalEvaluation, TradeSignal
+from data.market_data import MarketDataClient
+from execution.news import NewsAssessment
+from backtest.news import NeutralNewsFeed
+
+
+@dataclass(frozen=True)
+class BacktestTrade:
+    pair: str
+    side: str
+    signal_time: datetime
+    entry_time: datetime
+    exit_time: datetime
+    entry_index: int
+    exit_index: int
+    entry: float
+    stop_loss: float
+    take_profit: float
+    exit_price: float
+    exit_reason: str
+    r_multiple: float
+    bars_held: int
+    score: int
+    htf_bias: str
+    regime_label: str
+    regime_direction: str
+    zone: str
+    trigger_direction: str
+    trigger_event: str
+    trigger_strength: int
+    structure_event: str
+    structure_trend: str
+    score_htf: int
+    score_regime: int
+    score_trigger: int
+    score_liquidity: int
+    score_zone: int
+    score_news: int
+    score_session: int
+    score_fvg: int
+    score_order_block: int
+    score_mitigation: int
+    score_smt: int
+    shadow_bonus: int
+    entry_mode: str
+    entry_source: str
+    fill_delay_bars: int
+    partial_taken: bool
+    break_even_activated: bool
+    trailing_activated: bool
+    feature_breakdown: dict[str, int]
+    raw_r_multiple: float
+    risk_multiplier: float
+    atr_stop_applied: bool
+    atr_value: float | None
+    realistic_execution: bool
+    spread_pips: float
+    spread_cost_r: float
+    slippage_pips: float
+    slippage_cost_r: float
+    execution_delay_bars: int
+    execution_delay_cost_r: float
+    fill_ratio: float
+    partial_fill: bool
+
+
+@dataclass
+class BacktestPairReport:
+    pair: str
+    trades: list[BacktestTrade]
+    rejection_counts: dict[str, int]
+    evaluations: int
+    bars_processed: int
+    error: str | None = None
+    regime_evaluations: dict[str, int] | None = None
+    regime_acceptances: dict[str, int] | None = None
+
+    def metrics(self) -> dict[str, object]:
+        r_values = [trade.r_multiple for trade in self.trades]
+        trade_count = len(r_values)
+        wins = sum(1 for value in r_values if value > 0)
+        losses = sum(1 for value in r_values if value < 0)
+        breakeven = sum(1 for value in r_values if value == 0)
+        gross_profit = sum(value for value in r_values if value > 0)
+        gross_loss = abs(sum(value for value in r_values if value < 0))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+        win_rate = wins / trade_count if trade_count else 0.0
+        avg_r = mean(r_values) if r_values else 0.0
+        median_r = median(r_values) if r_values else 0.0
+        avg_score = mean(trade.score for trade in self.trades) if self.trades else 0.0
+        avg_shadow_bonus = mean(trade.shadow_bonus for trade in self.trades) if self.trades else 0.0
+        avg_bars_held = mean(trade.bars_held for trade in self.trades) if self.trades else 0.0
+        limit_entries = sum(1 for trade in self.trades if trade.entry_mode == "MITIGATION_LIMIT")
+        market_entries = sum(1 for trade in self.trades if trade.entry_mode == "MARKET")
+        avg_fill_delay_bars = mean(trade.fill_delay_bars for trade in self.trades) if self.trades else 0.0
+        partial_exits = sum(1 for trade in self.trades if trade.partial_taken)
+        break_even_activations = sum(1 for trade in self.trades if trade.break_even_activated)
+        trailing_activations = sum(1 for trade in self.trades if trade.trailing_activated)
+        partial_fills = sum(1 for trade in self.trades if trade.partial_fill)
+        tp_hits = sum(1 for trade in self.trades if trade.exit_reason == "take_profit")
+        sl_hits = sum(1 for trade in self.trades if trade.exit_reason in {"stop_loss", "trailing_stop", "break_even_stop"})
+        timeout_exits = sum(1 for trade in self.trades if trade.exit_reason == "timeout")
+        avg_slippage_pips = mean(trade.slippage_pips for trade in self.trades) if self.trades else 0.0
+        avg_spread_pips = mean(trade.spread_pips for trade in self.trades) if self.trades else 0.0
+        total_slippage_cost_r = sum(trade.slippage_cost_r for trade in self.trades)
+        total_spread_cost_r = sum(trade.spread_cost_r for trade in self.trades)
+        avg_slippage_cost_r = mean(trade.slippage_cost_r for trade in self.trades) if self.trades else 0.0
+        avg_spread_cost_r = mean(trade.spread_cost_r for trade in self.trades) if self.trades else 0.0
+        avg_delay_cost_r = mean(trade.execution_delay_cost_r for trade in self.trades) if self.trades else 0.0
+        avg_risk_multiplier = mean(trade.risk_multiplier for trade in self.trades) if self.trades else 1.0
+        realistic_trades = sum(1 for trade in self.trades if trade.realistic_execution)
+        attempted_fills = trade_count + int(self.rejection_counts.get("entry_not_filled", 0))
+        fill_rate = trade_count / attempted_fills if attempted_fills > 0 else 0.0
+        partial_fill_rate = partial_fills / trade_count if trade_count > 0 else 0.0
+        acceptance_rate = trade_count / self.evaluations if self.evaluations else 0.0
+        equity = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for value in r_values:
+            equity += value
+            peak = max(peak, equity)
+            max_drawdown = max(max_drawdown, peak - equity)
+
+        return {
+            "pair": self.pair,
+            "trades": trade_count,
+            "wins": wins,
+            "losses": losses,
+            "breakeven": breakeven,
+            "win_rate": win_rate,
+            "avg_r": avg_r,
+            "median_r": median_r,
+            "profit_factor": profit_factor,
+            "max_drawdown_r": max_drawdown,
+            "avg_score": avg_score,
+            "avg_shadow_bonus": avg_shadow_bonus,
+            "avg_bars_held": avg_bars_held,
+            "limit_entries": limit_entries,
+            "market_entries": market_entries,
+            "avg_fill_delay_bars": avg_fill_delay_bars,
+            "partial_exits": partial_exits,
+            "break_even_activations": break_even_activations,
+            "trailing_activations": trailing_activations,
+            "partial_fills": partial_fills,
+            "tp_hits": tp_hits,
+            "sl_hits": sl_hits,
+            "timeout_exits": timeout_exits,
+            "avg_slippage_pips": avg_slippage_pips,
+            "avg_spread_pips": avg_spread_pips,
+            "total_slippage_cost_r": total_slippage_cost_r,
+            "total_spread_cost_r": total_spread_cost_r,
+            "avg_slippage_cost_r": avg_slippage_cost_r,
+            "avg_spread_cost_r": avg_spread_cost_r,
+            "avg_delay_cost_r": avg_delay_cost_r,
+            "avg_risk_multiplier": avg_risk_multiplier,
+            "realistic_execution_trades": realistic_trades,
+            "fill_rate": fill_rate,
+            "partial_fill_rate": partial_fill_rate,
+            "evaluations": self.evaluations,
+            "acceptance_rate": acceptance_rate,
+            "rejections": dict(self.rejection_counts),
+            "regime_evaluations": dict(self.regime_evaluations or {}),
+            "regime_acceptances": dict(self.regime_acceptances or {}),
+            "error": self.error,
+        }
+
+
+@dataclass
+class BacktestRunResult:
+    pair_reports: list[BacktestPairReport]
+    parameters: dict[str, object]
+    started_at: datetime
+    finished_at: datetime
+    news_mode: str
+
+    @property
+    def trades(self) -> list[BacktestTrade]:
+        items: list[BacktestTrade] = []
+        for report in self.pair_reports:
+            items.extend(report.trades)
+        return items
+
+    def overall_metrics(self) -> dict[str, object]:
+        trades = self.trades
+        r_values = [trade.r_multiple for trade in trades]
+        trade_count = len(r_values)
+        wins = sum(1 for value in r_values if value > 0)
+        losses = sum(1 for value in r_values if value < 0)
+        breakeven = sum(1 for value in r_values if value == 0)
+        gross_profit = sum(value for value in r_values if value > 0)
+        gross_loss = abs(sum(value for value in r_values if value < 0))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+        win_rate = wins / trade_count if trade_count else 0.0
+        avg_r = mean(r_values) if r_values else 0.0
+        median_r = median(r_values) if r_values else 0.0
+        avg_score = mean(trade.score for trade in trades) if trades else 0.0
+        avg_shadow_bonus = mean(trade.shadow_bonus for trade in trades) if trades else 0.0
+        avg_bars_held = mean(trade.bars_held for trade in trades) if trades else 0.0
+        limit_entries = sum(1 for trade in trades if trade.entry_mode == "MITIGATION_LIMIT")
+        market_entries = sum(1 for trade in trades if trade.entry_mode == "MARKET")
+        avg_fill_delay_bars = mean(trade.fill_delay_bars for trade in trades) if trades else 0.0
+        partial_exits = sum(1 for trade in trades if trade.partial_taken)
+        break_even_activations = sum(1 for trade in trades if trade.break_even_activated)
+        trailing_activations = sum(1 for trade in trades if trade.trailing_activated)
+        partial_fills = sum(1 for trade in trades if trade.partial_fill)
+        tp_hits = sum(1 for trade in trades if trade.exit_reason == "take_profit")
+        sl_hits = sum(1 for trade in trades if trade.exit_reason in {"stop_loss", "trailing_stop", "break_even_stop"})
+        timeout_exits = sum(1 for trade in trades if trade.exit_reason == "timeout")
+        avg_slippage_pips = mean(trade.slippage_pips for trade in trades) if trades else 0.0
+        avg_spread_pips = mean(trade.spread_pips for trade in trades) if trades else 0.0
+        total_slippage_cost_r = sum(trade.slippage_cost_r for trade in trades)
+        total_spread_cost_r = sum(trade.spread_cost_r for trade in trades)
+        avg_slippage_cost_r = mean(trade.slippage_cost_r for trade in trades) if trades else 0.0
+        avg_spread_cost_r = mean(trade.spread_cost_r for trade in trades) if trades else 0.0
+        avg_delay_cost_r = mean(trade.execution_delay_cost_r for trade in trades) if trades else 0.0
+        avg_risk_multiplier = mean(trade.risk_multiplier for trade in trades) if trades else 1.0
+        realistic_trades = sum(1 for trade in trades if trade.realistic_execution)
+
+        equity = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for value in r_values:
+            equity += value
+            peak = max(peak, equity)
+            max_drawdown = max(max_drawdown, peak - equity)
+
+        rejection_totals: Counter[str] = Counter()
+        regime_eval_totals: Counter[str] = Counter()
+        regime_accept_totals: Counter[str] = Counter()
+        for report in self.pair_reports:
+            rejection_totals.update(report.rejection_counts)
+            regime_eval_totals.update(report.regime_evaluations or {})
+            regime_accept_totals.update(report.regime_acceptances or {})
+        attempted_fills = trade_count + int(rejection_totals.get("entry_not_filled", 0))
+        fill_rate = trade_count / attempted_fills if attempted_fills > 0 else 0.0
+        partial_fill_rate = partial_fills / trade_count if trade_count > 0 else 0.0
+
+        return {
+            "trades": trade_count,
+            "wins": wins,
+            "losses": losses,
+            "breakeven": breakeven,
+            "win_rate": win_rate,
+            "avg_r": avg_r,
+            "median_r": median_r,
+            "profit_factor": profit_factor,
+            "max_drawdown_r": max_drawdown,
+            "avg_score": avg_score,
+            "avg_shadow_bonus": avg_shadow_bonus,
+            "avg_bars_held": avg_bars_held,
+            "limit_entries": limit_entries,
+            "market_entries": market_entries,
+            "avg_fill_delay_bars": avg_fill_delay_bars,
+            "partial_exits": partial_exits,
+            "break_even_activations": break_even_activations,
+            "trailing_activations": trailing_activations,
+            "partial_fills": partial_fills,
+            "tp_hits": tp_hits,
+            "sl_hits": sl_hits,
+            "timeout_exits": timeout_exits,
+            "avg_slippage_pips": avg_slippage_pips,
+            "avg_spread_pips": avg_spread_pips,
+            "total_slippage_cost_r": total_slippage_cost_r,
+            "total_spread_cost_r": total_spread_cost_r,
+            "avg_slippage_cost_r": avg_slippage_cost_r,
+            "avg_spread_cost_r": avg_spread_cost_r,
+            "avg_delay_cost_r": avg_delay_cost_r,
+            "avg_risk_multiplier": avg_risk_multiplier,
+            "realistic_execution_trades": realistic_trades,
+            "fill_rate": fill_rate,
+            "partial_fill_rate": partial_fill_rate,
+            "rejections": dict(rejection_totals),
+            "regime_evaluations": dict(regime_eval_totals),
+            "regime_acceptances": dict(regime_accept_totals),
+            "news_mode": self.news_mode,
+        }
+
+    def pair_rows(self) -> list[dict[str, object]]:
+        return [report.metrics() for report in self.pair_reports]
+
+    def trade_rows(self) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for trade in self.trades:
+            rows.append(asdict(trade))
+        return rows
+
+    @staticmethod
+    def _jsonable(value: object) -> object:
+        if isinstance(value, float) and math.isinf(value):
+            return None
+        if isinstance(value, Counter):
+            return dict(value)
+        return value
+
+    def export(self, output_dir: str | Path) -> Path:
+        target = Path(output_dir)
+        target.mkdir(parents=True, exist_ok=True)
+
+        summary = {
+            "parameters": self.parameters,
+            "started_at": self.started_at.isoformat(),
+            "finished_at": self.finished_at.isoformat(),
+            "news_mode": self.news_mode,
+            "overall": self.overall_metrics(),
+            "pairs": self.pair_rows(),
+        }
+
+        for key, value in list(summary["overall"].items()):
+            summary["overall"][key] = self._jsonable(value)
+        for row in summary["pairs"]:
+            for key, value in list(row.items()):
+                row[key] = self._jsonable(value)
+
+        (target / "summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+
+        trades_df = pd.DataFrame(self.trade_rows())
+        if not trades_df.empty:
+            trades_df.to_csv(target / "trades.csv", index=False)
+
+        pairs_df = pd.DataFrame(self.pair_rows())
+        if not pairs_df.empty:
+            pairs_df.to_csv(target / "pair_summary.csv", index=False)
+
+        return target
+
+
+class BacktestEngine:
+    def __init__(
+        self,
+        market_data: MarketDataClient,
+        signal_engine: SignalEngine,
+        *,
+        history_limit: int = 3000,
+        max_hold_bars: int = 48,
+        warmup_bars: int = 120,
+        news_feed: object | None = None,
+        execution_settings: RealisticExecutionSettings | None = None,
+        atr_risk_settings: ATRRiskSettings | None = None,
+        equity_protection_settings: EquityProtectionSettings | None = None,
+    ) -> None:
+        self.market_data = market_data
+        self.signal_engine = signal_engine
+        self.history_limit = history_limit
+        self.max_hold_bars = max(1, max_hold_bars)
+        self.warmup_bars = max(80, warmup_bars)
+        self.news_feed = news_feed or NeutralNewsFeed()
+        self.execution_settings = (execution_settings or RealisticExecutionSettings()).sanitized()
+        self.atr_risk_settings = (atr_risk_settings or ATRRiskSettings()).sanitized()
+        self.equity_protection_settings = (equity_protection_settings or EquityProtectionSettings()).sanitized()
+        self._rng = build_rng(self.execution_settings.random_seed)
+
+    def load_pair_frames(self, pair: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        ltf = self.market_data.fetch_ohlcv(pair, self.signal_engine.ltf_timeframe, limit=self.history_limit)
+        htf = self.market_data.fetch_ohlcv(pair, self.signal_engine.htf_timeframe, limit=self.history_limit)
+        trigger = self.market_data.fetch_ohlcv(pair, self.signal_engine.trigger_timeframe, limit=self.history_limit)
+        return ltf, htf, trigger
+
+    @staticmethod
+    def _evaluate_news(feed: object, pair: str, as_of: datetime) -> NewsAssessment:
+        if hasattr(feed, "evaluate"):
+            return feed.evaluate(pair, as_of)  # type: ignore[no-any-return]
+        return NewsAssessment(
+            allow_trading=True,
+            score=15,
+            uncertainty="neutral",
+            summary="Backtest neutral news assumption",
+            high_impact_events=0,
+        )
+
+    def _slippage_pips(self, frame: pd.DataFrame, index: int) -> float:
+        settings = self.execution_settings
+        if not settings.enabled or settings.max_slippage_pips <= 0:
+            return 0.0
+
+        mode = settings.slippage_mode
+        if mode == "none":
+            return 0.0
+        if mode == "random":
+            return float(self._rng.uniform(0.0, settings.max_slippage_pips))
+        if mode == "volatility":
+            factor = volatility_slippage_factor(frame, index=index)
+            jitter = self._rng.uniform(0.6, 1.0)
+            return float(settings.max_slippage_pips * factor * jitter)
+        return 0.0
+
+    def _market_execution_price(
+        self,
+        *,
+        pair: str,
+        side: str,
+        raw_entry: float,
+        frame: pd.DataFrame,
+        index: int,
+    ) -> tuple[float, float, float]:
+        settings = self.execution_settings
+        spread_pips = settings.spread_pips(pair)
+        slippage_pips = self._slippage_pips(frame, index)
+        pip_size = settings.pip_size(pair)
+
+        spread_adjust = (spread_pips * pip_size) * 0.5
+        slippage_adjust = slippage_pips * pip_size
+        total_adjust = spread_adjust + slippage_adjust
+
+        if side == "BUY":
+            return raw_entry + total_adjust, spread_pips, slippage_pips
+        return raw_entry - total_adjust, spread_pips, slippage_pips
+
+    def _simulate_trade(
+        self,
+        pair: str,
+        signal: TradeSignal,
+        frame: pd.DataFrame,
+        signal_index: int,
+        *,
+        risk_multiplier: float = 1.0,
+    ) -> tuple[BacktestTrade | None, str | None]:
+        execution = self.execution_settings
+        realistic_enabled = execution.enabled
+        entry_mode = signal.entry_mode.upper()
+        fill_index = signal_index
+        entry_time = signal.generated_at
+        fill_delay_bars = 0
+        execution_delay_bars = execution.execution_delay_bars if realistic_enabled else 0
+        fill_ratio = 1.0
+        partial_fill = False
+        spread_pips = 0.0
+        slippage_pips = 0.0
+        atr_stop_applied = False
+        atr_value = None
+        raw_entry = signal.entry
+        entry = signal.entry
+
+        if entry_mode == "MITIGATION_LIMIT":
+            limit_fill_index: int | None = None
+            tolerance = execution.tolerance_price(pair) if realistic_enabled else 0.0
+            start_index = signal_index + 1 + execution_delay_bars
+            max_fill_index = len(frame) - 1
+            for idx in range(start_index, max_fill_index + 1):
+                candle = frame.iloc[idx]
+                high = float(candle["high"])
+                low = float(candle["low"])
+
+                if signal.side == "BUY" and low <= (signal.entry + tolerance) and high >= (signal.entry - tolerance):
+                    limit_fill_index = idx
+                    break
+                if signal.side == "SELL" and high >= (signal.entry - tolerance) and low <= (signal.entry + tolerance):
+                    limit_fill_index = idx
+                    break
+
+            if limit_fill_index is None:
+                return None, "entry_not_filled"
+
+            fill_index = limit_fill_index
+            entry_time = frame.index[fill_index].to_pydatetime()
+            fill_delay_bars = fill_index - signal_index
+            raw_entry = signal.entry
+            entry = raw_entry
+
+            if realistic_enabled:
+                if execution.apply_spread_to_limit:
+                    adjusted, spread_pips, slippage_pips = self._market_execution_price(
+                        pair=pair,
+                        side=signal.side,
+                        raw_entry=raw_entry,
+                        frame=frame,
+                        index=fill_index,
+                    )
+                    entry = adjusted
+                elif execution.max_slippage_pips > 0 and execution.slippage_mode != "none":
+                    slippage_pips = self._slippage_pips(frame, fill_index)
+                    slippage_price = slippage_pips * execution.pip_size(pair)
+                    entry = raw_entry + slippage_price if signal.side == "BUY" else raw_entry - slippage_price
+
+                if self._rng.random() > execution.partial_fill_probability:
+                    fill_ratio = float(self._rng.uniform(execution.partial_fill_min_ratio, 0.99))
+                    partial_fill = True
+        else:
+            if realistic_enabled:
+                fill_index = min(len(frame) - 1, signal_index + execution_delay_bars)
+                if fill_index < 0 or fill_index >= len(frame):
+                    return None, "entry_not_filled"
+                fill_delay_bars = fill_index - signal_index
+                entry_time = frame.index[fill_index].to_pydatetime()
+                raw_entry = float(frame.iloc[fill_index]["close"])
+                entry, spread_pips, slippage_pips = self._market_execution_price(
+                    pair=pair,
+                    side=signal.side,
+                    raw_entry=raw_entry,
+                    frame=frame,
+                    index=fill_index,
+                )
+
+        initial_stop_loss = signal.stop_loss
+        take_profit = signal.take_profit
+        atr_settings = self.atr_risk_settings
+        if atr_settings.enabled:
+            atr_value = atr_value_at(frame, fill_index, period=atr_settings.period)
+            if atr_value is not None:
+                atr_distance = atr_value * atr_settings.multiplier
+                if atr_distance > 0:
+                    base_risk = max(abs(signal.entry - signal.stop_loss), 1e-9)
+                    rr = abs(signal.take_profit - signal.entry) / base_risk
+                    if signal.side == "BUY":
+                        initial_stop_loss = entry - atr_distance
+                        take_profit = entry + atr_distance * rr
+                    else:
+                        initial_stop_loss = entry + atr_distance
+                        take_profit = entry - atr_distance * rr
+                    atr_stop_applied = True
+
+        risk = abs(entry - initial_stop_loss)
+        if risk <= 0:
+            risk = max(entry * 0.0001, 1e-9)
+
+        managed_hold_bars = signal.time_stop_bars if signal.time_stop_bars > 0 else self.max_hold_bars
+        max_exit_index = min(len(frame) - 1, fill_index + max(1, managed_hold_bars))
+        if max_exit_index <= fill_index:
+            return None, "entry_not_filled"
+
+        stop_loss = initial_stop_loss
+        partial_price = signal.partial_take_profit
+        partial_fraction = min(max(signal.partial_take_fraction, 0.0), 0.95)
+        partial_taken = False
+        break_even_activated = False
+        trailing_activated = False
+        remaining = fill_ratio
+        realized_r = 0.0
+
+        exit_index = max_exit_index
+        exit_price = float(frame.iloc[exit_index]["close"])
+        exit_reason = "timeout"
+
+        for idx in range(fill_index + 1, max_exit_index + 1):
+            candle = frame.iloc[idx]
+            high = float(candle["high"])
+            low = float(candle["low"])
+            close = float(candle["close"])
+
+            if signal.side == "BUY":
+                stop_hit = low <= stop_loss
+                if stop_hit:
+                    exit_index = idx
+                    exit_price = stop_loss
+                    hit_r = (stop_loss - entry) / risk
+                    realized_r += remaining * hit_r
+                    remaining = 0.0
+                    if trailing_activated and stop_loss > initial_stop_loss:
+                        exit_reason = "trailing_stop"
+                    elif break_even_activated and abs(stop_loss - entry) <= max(1e-9, risk * 0.03):
+                        exit_reason = "break_even_stop"
+                    else:
+                        exit_reason = "stop_loss"
+                    break
+
+                if (
+                    partial_price is not None
+                    and not partial_taken
+                    and partial_fraction > 0
+                    and high >= partial_price
+                ):
+                    closed = min(partial_fraction, remaining)
+                    if closed > 0:
+                        realized_r += closed * ((partial_price - entry) / risk)
+                        remaining -= closed
+                        partial_taken = True
+
+                if high >= take_profit:
+                    exit_index = idx
+                    exit_price = take_profit
+                    realized_r += remaining * ((take_profit - entry) / risk)
+                    remaining = 0.0
+                    exit_reason = "take_profit"
+                    break
+
+                best_r = (high - entry) / risk
+                if signal.break_even_r > 0 and not break_even_activated and best_r >= signal.break_even_r and stop_loss < entry:
+                    stop_loss = entry
+                    break_even_activated = True
+
+                if signal.trailing_enabled and best_r >= signal.trailing_start_r:
+                    trailing_activated = True
+                    start = max(fill_index, idx - max(1, signal.trailing_lookback_bars) + 1)
+                    trailing_slice = frame.iloc[start : idx + 1]
+                    trail_candidate = float(trailing_slice["low"].min())
+                    if trail_candidate > stop_loss:
+                        stop_loss = trail_candidate
+
+            else:
+                stop_hit = high >= stop_loss
+                if stop_hit:
+                    exit_index = idx
+                    exit_price = stop_loss
+                    hit_r = (entry - stop_loss) / risk
+                    realized_r += remaining * hit_r
+                    remaining = 0.0
+                    if trailing_activated and stop_loss < initial_stop_loss:
+                        exit_reason = "trailing_stop"
+                    elif break_even_activated and abs(stop_loss - entry) <= max(1e-9, risk * 0.03):
+                        exit_reason = "break_even_stop"
+                    else:
+                        exit_reason = "stop_loss"
+                    break
+
+                if (
+                    partial_price is not None
+                    and not partial_taken
+                    and partial_fraction > 0
+                    and low <= partial_price
+                ):
+                    closed = min(partial_fraction, remaining)
+                    if closed > 0:
+                        realized_r += closed * ((entry - partial_price) / risk)
+                        remaining -= closed
+                        partial_taken = True
+
+                if low <= take_profit:
+                    exit_index = idx
+                    exit_price = take_profit
+                    realized_r += remaining * ((entry - take_profit) / risk)
+                    remaining = 0.0
+                    exit_reason = "take_profit"
+                    break
+
+                best_r = (entry - low) / risk
+                if signal.break_even_r > 0 and not break_even_activated and best_r >= signal.break_even_r and stop_loss > entry:
+                    stop_loss = entry
+                    break_even_activated = True
+
+                if signal.trailing_enabled and best_r >= signal.trailing_start_r:
+                    trailing_activated = True
+                    start = max(fill_index, idx - max(1, signal.trailing_lookback_bars) + 1)
+                    trailing_slice = frame.iloc[start : idx + 1]
+                    trail_candidate = float(trailing_slice["high"].max())
+                    if trail_candidate < stop_loss:
+                        stop_loss = trail_candidate
+
+            if exit_reason == "timeout":
+                exit_price = close
+
+        if exit_reason == "timeout":
+            exit_price = float(frame.iloc[exit_index]["close"])
+            if remaining > 0:
+                if signal.side == "BUY":
+                    realized_r += remaining * ((exit_price - entry) / risk)
+                else:
+                    realized_r += remaining * ((entry - exit_price) / risk)
+                remaining = 0.0
+
+        raw_r_multiple = realized_r
+        adjusted_r_multiple = raw_r_multiple * max(0.0, risk_multiplier)
+
+        spread_cost_r = 0.0
+        slippage_cost_r = 0.0
+        execution_delay_cost_r = 0.0
+        if realistic_enabled:
+            pip_size = execution.pip_size(pair)
+            spread_price_cost = (spread_pips * pip_size * 0.5) if (entry_mode == "MARKET" or execution.apply_spread_to_limit) else 0.0
+            slippage_price_cost = slippage_pips * pip_size
+            spread_cost_r = -spread_price_cost / risk
+            slippage_cost_r = -slippage_price_cost / risk
+            if fill_delay_bars > 0:
+                if signal.side == "BUY":
+                    execution_delay_cost_r = -((raw_entry - signal.entry) / risk)
+                else:
+                    execution_delay_cost_r = -((signal.entry - raw_entry) / risk)
+
+        raw_breakdown = signal.meta.get("score_breakdown") if isinstance(signal.meta, dict) else None
+        if isinstance(raw_breakdown, dict):
+            feature_breakdown = {str(key): int(value) for key, value in raw_breakdown.items()}
+        else:
+            feature_breakdown = {
+                "htf": int(signal.score_breakdown.htf_alignment),
+                "regime": int(signal.score_breakdown.regime_alignment),
+                "trigger": int(signal.score_breakdown.trigger_confirmation),
+                "liquidity": int(signal.score_breakdown.liquidity_displacement),
+                "pd": int(signal.score_breakdown.premium_discount),
+                "session": int(signal.score_breakdown.session_timing),
+                "news": int(signal.score_breakdown.news_filter),
+                "shadow_fvg": int(signal.score_breakdown.fvg_alignment),
+                "shadow_ob": int(signal.score_breakdown.order_block_alignment),
+                "shadow_mitigation": int(signal.score_breakdown.mitigation_alignment),
+                "shadow_smt": int(signal.score_breakdown.smt_alignment),
+            }
+
+        exit_time = frame.index[exit_index].to_pydatetime()
+        trade = BacktestTrade(
+            pair=pair,
+            side=signal.side,
+            signal_time=signal.generated_at,
+            entry_time=entry_time,
+            exit_time=exit_time,
+            entry_index=fill_index,
+            exit_index=exit_index,
+            entry=entry,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            exit_price=round(exit_price, 5),
+            exit_reason=exit_reason,
+            r_multiple=round(adjusted_r_multiple, 4),
+            bars_held=exit_index - fill_index,
+            score=signal.score,
+            htf_bias=signal.htf_bias,
+            regime_label=signal.regime_label,
+            regime_direction=signal.regime_direction,
+            zone=signal.zone,
+            trigger_direction=signal.trigger_direction,
+            trigger_event=signal.trigger_event,
+            trigger_strength=signal.trigger_strength,
+            structure_event=signal.structure_event,
+            structure_trend=signal.structure_trend,
+            score_htf=signal.score_breakdown.htf_alignment,
+            score_regime=signal.score_breakdown.regime_alignment,
+            score_trigger=signal.score_breakdown.trigger_confirmation,
+            score_liquidity=signal.score_breakdown.liquidity_displacement,
+            score_zone=signal.score_breakdown.premium_discount,
+            score_news=signal.score_breakdown.news_filter,
+            score_session=signal.score_breakdown.session_timing,
+            score_fvg=signal.score_breakdown.fvg_alignment,
+            score_order_block=signal.score_breakdown.order_block_alignment,
+            score_mitigation=signal.score_breakdown.mitigation_alignment,
+            score_smt=signal.score_breakdown.smt_alignment,
+            shadow_bonus=signal.score_breakdown.shadow_bonus,
+            entry_mode=entry_mode,
+            entry_source=signal.entry_source,
+            fill_delay_bars=fill_delay_bars,
+            partial_taken=partial_taken,
+            break_even_activated=break_even_activated,
+            trailing_activated=trailing_activated,
+            feature_breakdown=feature_breakdown,
+            raw_r_multiple=round(raw_r_multiple, 4),
+            risk_multiplier=round(max(0.0, risk_multiplier), 4),
+            atr_stop_applied=atr_stop_applied,
+            atr_value=round(float(atr_value), 6) if atr_value is not None else None,
+            realistic_execution=realistic_enabled,
+            spread_pips=round(spread_pips, 4),
+            spread_cost_r=round(spread_cost_r, 6),
+            slippage_pips=round(slippage_pips, 4),
+            slippage_cost_r=round(slippage_cost_r, 6),
+            execution_delay_bars=fill_delay_bars,
+            execution_delay_cost_r=round(execution_delay_cost_r, 6),
+            fill_ratio=round(fill_ratio, 4),
+            partial_fill=partial_fill,
+        )
+        return trade, None
+
+    def run_pair_from_frames(
+        self,
+        pair: str,
+        ltf: pd.DataFrame,
+        htf: pd.DataFrame,
+        trigger: pd.DataFrame,
+        *,
+        reference_pair: str | None = None,
+        reference_trigger: pd.DataFrame | None = None,
+        equity_state: EquityProtectionState | None = None,
+    ) -> BacktestPairReport:
+        if ltf.empty or htf.empty or trigger.empty:
+            return BacktestPairReport(
+                pair=pair,
+                trades=[],
+                rejection_counts={},
+                evaluations=0,
+                bars_processed=0,
+                error="empty frame",
+            )
+
+        ltf = ltf.sort_index()
+        htf = htf.sort_index()
+        trigger = trigger.sort_index()
+
+        trades: list[BacktestTrade] = []
+        rejection_counts: defaultdict[str, int] = defaultdict(int)
+        regime_evaluations: defaultdict[str, int] = defaultdict(int)
+        regime_acceptances: defaultdict[str, int] = defaultdict(int)
+        evaluations = 0
+        cursor = self.warmup_bars
+        min_bars = max(120, self.signal_engine.regime_long_window)
+
+        while cursor < len(trigger) - self.max_hold_bars - 1:
+            trigger_slice = trigger.iloc[: cursor + 1]
+            current_time = trigger_slice.index[-1].to_pydatetime()
+            ltf_slice = ltf[ltf.index <= trigger_slice.index[-1]]
+            htf_slice = htf[htf.index <= trigger_slice.index[-1]]
+
+            if len(trigger_slice) < min_bars or len(ltf_slice) < min_bars or len(htf_slice) < min_bars:
+                cursor += 1
+                continue
+
+            news_assessment = self._evaluate_news(self.news_feed, pair, current_time)
+            decision: SignalEvaluation = self.signal_engine.evaluate_snapshot(
+                pair,
+                htf_slice,
+                ltf_slice,
+                trigger_frame=trigger_slice,
+                reference_pair=reference_pair,
+                reference_trigger_frame=(
+                    reference_trigger[reference_trigger.index <= trigger_slice.index[-1]]
+                    if reference_pair is not None and reference_trigger is not None
+                    else None
+                ),
+                news_assessment=news_assessment,
+                emit_logs=False,
+            )
+            evaluations += 1
+            if decision.regime_label:
+                regime_evaluations[decision.regime_label.upper()] += 1
+
+            if not decision.accepted or decision.signal is None:
+                rejection_counts[decision.rejection_stage or "unknown"] += 1
+                cursor += 1
+                continue
+            if decision.regime_label:
+                regime_acceptances[decision.regime_label.upper()] += 1
+
+            if equity_state is not None and not equity_state.allow_new_trade():
+                rejection_counts["equity_halt"] += 1
+                cursor += 1
+                continue
+
+            release_allowed, release_drop = self.signal_engine.gate_signal_release(decision.signal, commit=True)
+            if not release_allowed:
+                rejection_counts[(release_drop.stage if release_drop is not None else "release_gate")] += 1
+                cursor += 1
+                continue
+
+            risk_multiplier = equity_state.current_risk_multiplier() if equity_state is not None else 1.0
+            trade, entry_rejection = self._simulate_trade(
+                pair,
+                decision.signal,
+                trigger,
+                cursor,
+                risk_multiplier=risk_multiplier,
+            )
+            if trade is None:
+                rejection_counts[entry_rejection or "entry_not_filled"] += 1
+                cursor += 1
+                continue
+
+            trades.append(trade)
+            if equity_state is not None:
+                equity_state.register_trade(trade.r_multiple)
+            cursor = trade.exit_index + 1
+
+        return BacktestPairReport(
+            pair=pair,
+            trades=trades,
+            rejection_counts=dict(rejection_counts),
+            evaluations=evaluations,
+            bars_processed=len(trigger),
+            regime_evaluations=dict(regime_evaluations),
+            regime_acceptances=dict(regime_acceptances),
+        )
+
+    def run_pair(
+        self,
+        pair: str,
+        *,
+        equity_state: EquityProtectionState | None = None,
+    ) -> BacktestPairReport:
+        try:
+            ltf, htf, trigger = self.load_pair_frames(pair)
+        except Exception as exc:
+            return BacktestPairReport(
+                pair=pair,
+                trades=[],
+                rejection_counts={},
+                evaluations=0,
+                bars_processed=0,
+                error=str(exc),
+            )
+
+        reference_pair = self.signal_engine._resolve_smt_reference_pair(pair, None)
+        reference_trigger: pd.DataFrame | None = None
+        if self.signal_engine.enable_smt_confirmation and reference_pair is not None:
+            try:
+                reference_trigger = self.market_data.fetch_ohlcv(
+                    reference_pair,
+                    self.signal_engine.trigger_timeframe,
+                    limit=self.history_limit,
+                )
+            except Exception:
+                reference_trigger = None
+
+        return self.run_pair_from_frames(
+            pair,
+            ltf,
+            htf,
+            trigger,
+            reference_pair=reference_pair,
+            reference_trigger=reference_trigger,
+            equity_state=equity_state,
+        )
+
+    def run(self, pairs: Iterable[str]) -> BacktestRunResult:
+        started_at = datetime.now(timezone.utc)
+        if hasattr(self.signal_engine, "reset_release_state"):
+            self.signal_engine.reset_release_state()
+        self._rng = build_rng(self.execution_settings.random_seed)
+        equity_state = EquityProtectionState(self.equity_protection_settings) if self.equity_protection_settings.enabled else None
+        reports = [self.run_pair(pair, equity_state=equity_state) for pair in pairs]
+        finished_at = datetime.now(timezone.utc)
+        parameters = {
+            "ltf_timeframe": self.signal_engine.ltf_timeframe,
+            "htf_timeframe": self.signal_engine.htf_timeframe,
+            "trigger_timeframe": self.signal_engine.trigger_timeframe,
+            "history_limit": self.history_limit,
+            "max_hold_bars": self.max_hold_bars,
+            "warmup_bars": self.warmup_bars,
+            "min_score": self.signal_engine.min_score,
+            "risk_reward": self.signal_engine.risk_reward,
+            "swing_window": self.signal_engine.swing_window,
+            "regime_short_window": self.signal_engine.regime_short_window,
+            "regime_long_window": self.signal_engine.regime_long_window,
+            "regime_opposition_confidence": self.signal_engine.regime_opposition_confidence,
+            "contraction_min_trigger_strength": self.signal_engine.contraction_min_trigger_strength,
+            "range_min_trigger_strength": self.signal_engine.range_min_trigger_strength,
+            "require_displacement_in_contraction": self.signal_engine.require_displacement_in_contraction,
+            "session_min_score": self.signal_engine.session_min_score,
+            "enable_smt_confirmation": self.signal_engine.enable_smt_confirmation,
+            "smt_hard_gate": self.signal_engine.smt_hard_gate,
+            "smt_min_strength": self.signal_engine.smt_min_strength,
+            "smt_opposite_block_strength": self.signal_engine.smt_opposite_block_strength,
+            "partial_tp_enabled": self.signal_engine.partial_tp_enabled,
+            "partial_tp_r": self.signal_engine.partial_tp_r,
+            "partial_tp_fraction": self.signal_engine.partial_tp_fraction,
+            "break_even_r": self.signal_engine.break_even_r,
+            "trailing_enabled": self.signal_engine.trailing_enabled,
+            "trailing_start_r": self.signal_engine.trailing_start_r,
+            "trailing_lookback_bars": self.signal_engine.trailing_lookback_bars,
+            "time_stop_bars": self.signal_engine.time_stop_bars,
+            "pair_correlation_threshold": self.signal_engine.correlation_cap.threshold,
+            "correlation_lookback": self.signal_engine.correlation_cap.lookback,
+            "currency_exposure_cap": self.signal_engine.currency_exposure_cap,
+            "portfolio_currency_gross_cap": self.signal_engine.portfolio_currency_gross_cap,
+            "portfolio_currency_net_cap": self.signal_engine.portfolio_currency_net_cap,
+            "portfolio_exposure_window_minutes": self.signal_engine.portfolio_exposure_window_minutes,
+            "pair_cooldown_minutes": self.signal_engine.pair_cooldown_minutes,
+            "max_entries_per_bias": self.signal_engine.max_entries_per_bias,
+            "bias_window_minutes": self.signal_engine.bias_window_minutes,
+            "enable_shadow_scoring": self.signal_engine.enable_shadow_scoring,
+            "enable_mitigation_entry": self.signal_engine.enable_mitigation_entry,
+            "enable_adaptive_weights": self.signal_engine.enable_adaptive_weights,
+            "adaptive_regime_weights": self.signal_engine._adaptive_weight_settings.regime_weights,
+            "enable_score_normalization": self.signal_engine._score_normalizer.settings.enabled,
+            "score_normalization_method": self.signal_engine._score_normalizer.settings.method,
+            "score_normalization_window": self.signal_engine._score_normalizer.settings.window,
+            "score_normalization_scale_factor": self.signal_engine._score_normalizer.settings.scale_factor,
+            "score_normalization_backtest_only": self.signal_engine._score_normalizer.settings.backtest_only,
+            "allow_live_score_normalization": self.signal_engine._score_normalizer.settings.allow_live,
+            "enable_dynamic_threshold": self.signal_engine._dynamic_threshold_tracker.settings.enabled,
+            "threshold_percentile": self.signal_engine._dynamic_threshold_tracker.settings.percentile,
+            "threshold_rolling_window": self.signal_engine._dynamic_threshold_tracker.settings.rolling_window,
+            "apply_dynamic_threshold": self.signal_engine._dynamic_threshold_tracker.settings.apply_threshold,
+            "dynamic_threshold_backtest_only": self.signal_engine._dynamic_threshold_tracker.settings.backtest_only,
+            "allow_live_dynamic_threshold": self.signal_engine._dynamic_threshold_tracker.settings.allow_live,
+            "enable_realistic_execution": self.execution_settings.enabled,
+            "spread_default_pips": self.execution_settings.spread_default_pips,
+            "spread_by_pair": self.execution_settings.spread_by_pair,
+            "slippage_mode": self.execution_settings.slippage_mode,
+            "max_slippage_pips": self.execution_settings.max_slippage_pips,
+            "execution_delay_bars": self.execution_settings.execution_delay_bars,
+            "partial_fill_probability": self.execution_settings.partial_fill_probability,
+            "partial_fill_min_ratio": self.execution_settings.partial_fill_min_ratio,
+            "limit_touch_tolerance_pips": self.execution_settings.limit_touch_tolerance_pips,
+            "apply_spread_to_limit": self.execution_settings.apply_spread_to_limit,
+            "random_seed": self.execution_settings.random_seed,
+            "enable_atr_risk": self.atr_risk_settings.enabled,
+            "atr_period": self.atr_risk_settings.period,
+            "atr_multiplier": self.atr_risk_settings.multiplier,
+            "enable_equity_protection": self.equity_protection_settings.enabled,
+            "max_drawdown_limit": self.equity_protection_settings.max_drawdown_limit,
+            "drawdown_risk_reduction_factor": self.equity_protection_settings.drawdown_risk_reduction_factor,
+            "max_consecutive_losses": self.equity_protection_settings.max_consecutive_losses,
+            "min_risk_multiplier": self.equity_protection_settings.min_risk_multiplier,
+        }
+        return BacktestRunResult(
+            pair_reports=reports,
+            parameters=parameters,
+            started_at=started_at,
+            finished_at=finished_at,
+            news_mode=self.news_feed.__class__.__name__,
+        )
