@@ -17,6 +17,7 @@ from core.adaptive_weights import (
 )
 from core.correlation import CorrelationCap, SignalCandidate
 from core.entry import EntryPlan, build_entry_plan
+from core.expectancy_engine_v3 import ExpectancyEngine, ExpectancySettings
 from core.portfolio import CurrencyExposureRecord, exposure_expiry, signal_currency_deltas
 from core.scoring import ScoreBreakdown, calculate_score_details, score_session_timing
 from core.shadow import ShadowFeatureContext, analyze_shadow_context
@@ -795,11 +796,31 @@ class SignalEngine:
             short_window=self.regime_short_window,
             long_window=self.regime_long_window,
         )
+        
+        # === INSTITUTIONAL PIPELINE: REGIME CHECK FIRST ===
+        # If transition regime, block signal BEFORE expensive SMC feature generation
+        regime_label = regime.label.upper()
+        if regime_label == "TRANSITION":
+            details = {
+                "regime": regime_label,
+                "regime_direction": regime.direction.upper(),
+            }
+            if emit_logs:
+                self._log_rejection(pair, "regime", "transition regime - blocked", **details)
+            return SignalEvaluation(
+                accepted=False,
+                signal=None,
+                rejection_stage="regime",
+                rejection_reason="transition regime - no edge",
+                details=details,
+                score_breakdown=None,
+                news_assessment=news_assessment,
+            )
+        
         trigger: TriggerContext = analyze_trigger(
             trigger_frame,
             swing_window=max(2, self.swing_window - 1),
         )
-        regime_label = regime.label.upper()
         regime_direction = regime.direction.upper()
 
         side, source = self._resolve_side(structure, trigger, regime, mtf)
