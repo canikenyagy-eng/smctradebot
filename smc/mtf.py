@@ -53,12 +53,24 @@ def premium_discount_context(
     )
 
 
-def zone_allows_trade(zone: str, side: str) -> bool:
+def zone_supports_direction(zone: str, target_direction: str) -> float:
+    """
+    Return compatibility score (0.0-1.0) between zone and target direction.
+    This is a FEATURE only - no decision logic.
+    
+    Args:
+        zone: premium/discount (zone type)
+        target_direction: bullish/bearish (trade direction)
+    
+    Returns:
+        compatibility score: 1.0 = compatible, 0.0 = incompatible
+    """
     zone_u = zone.upper()
-    side_u = side.upper()
-
-    if side_u == "BUY":
-        return zone_u == "DISCOUNT"
-    if side_u == "SELL":
-        return zone_u == "PREMIUM"
-    return False
+    direction_u = target_direction.upper()
+    
+    # Feature: zone compatibility with direction
+    if direction_u == "BULLISH":
+        return 1.0 if zone_u == "DISCOUNT" else 0.0
+    if direction_u == "BEARISH":
+        return 1.0 if zone_u == "PREMIUM" else 0.0
+    return 0.0  # unknown direction
