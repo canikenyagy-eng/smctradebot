@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
-from typing import Iterable
+from typing import Any, Iterable
 import json
 
 import pandas as pd
@@ -24,16 +24,56 @@ class WalkForwardWindowResult:
     test: BacktestRunResult
 
     def to_dict(self) -> dict[str, object]:
+        train_metrics = self.train.overall_metrics()
+        test_metrics = self.test.overall_metrics()
+        
         return {
             "window_index": self.window_index,
             "train_start": self.train_start.isoformat(),
             "train_end": self.train_end.isoformat(),
             "test_start": self.test_start.isoformat(),
             "test_end": self.test_end.isoformat(),
-            "train_metrics": self.train.overall_metrics(),
-            "test_metrics": self.test.overall_metrics(),
+            "train_metrics": train_metrics,
+            "test_metrics": test_metrics,
             "train_pairs": self.train.pair_rows(),
             "test_pairs": self.test.pair_rows(),
+            # Extended metrics
+            "train_extended": {
+                "win_rate": train_metrics.get("win_rate", 0),
+                "profit_factor": train_metrics.get("profit_factor", 0),
+                "avg_r": train_metrics.get("avg_r", 0),
+                "max_drawdown_r": train_metrics.get("max_drawdown_r", 0),
+                "signal_count": train_metrics.get("trades", 0),
+                "acceptance_rate": train_metrics.get("acceptance_rate", 0),
+                "regime_breakdown": self._extract_regime_metrics(self.train),
+            },
+            "test_extended": {
+                "win_rate": test_metrics.get("win_rate", 0),
+                "profit_factor": test_metrics.get("profit_factor", 0),
+                "avg_r": test_metrics.get("avg_r", 0),
+                "max_drawdown_r": test_metrics.get("max_drawdown_r", 0),
+                "signal_count": test_metrics.get("trades", 0),
+                "acceptance_rate": test_metrics.get("acceptance_rate", 0),
+                "regime_breakdown": self._extract_regime_metrics(self.test),
+            },
+        }
+
+    def _extract_regime_metrics(self, result: BacktestRunResult) -> dict[str, Any]:
+        """Extract regime breakdown from result."""
+        regime_evals = {}
+        regime_accepts = {}
+        
+        for pair_report in result.pair_reports:
+            if pair_report.regime_evaluations:
+                for regime, count in pair_report.regime_evaluations.items():
+                    regime_evals[regime] = regime_evals.get(regime, 0) + count
+            if pair_report.regime_acceptances:
+                for regime, count in pair_report.regime_acceptances.items():
+                    regime_accepts[regime] = regime_accepts.get(regime, 0) + count
+        
+        return {
+            "evaluations": regime_evals,
+            "acceptances": regime_accepts,
         }
 
 
@@ -179,7 +219,7 @@ class WalkForwardRunner:
         )
 
     @staticmethod
-    def _aggregate_summary(windows: list[WalkForwardWindowResult]) -> dict[str, object]:
+    def _aggregate_summary(windows: list[WalkForwardWindowResult]) -> dict[str, Any]:
         if not windows:
             return {
                 "window_count": 0,
@@ -193,30 +233,79 @@ class WalkForwardRunner:
                 "test_avg_drawdown_r": 0.0,
                 "train_total_trades": 0,
                 "test_total_trades": 0,
+                # Extended metrics
+                "stability_metrics": {
+                    "train_test_gap_pf": 0.0,
+                    "train_test_gap_wr": 0.0,
+                    "train_test_gap_r": 0.0,
+                    "consistency_score": 0.0,
+                },
+                "aggregate_metrics": {},
             }
+
+        def avg(rows: list[dict[str, Any]], key: str) -> float:
+            values = [float(row.get(key, 0.0)) for row in rows]
+            return round(mean(values), 6) if values else 0.0
+
+        def total(rows: list[dict[str, Any]], key: str) -> int:
+            return int(sum(int(row.get(key, 0)) for row in rows))
+
+        def std(rows: list[dict[str, Any]], key: str) -> float:
+            """Compute standard deviation."""
+            from statistics import pstdev as ps
+            values = [float(row.get(key, 0.0)) for row in rows]
+            if len(values) < 2:
+                return 0.0
+            return round(ps(values), 4)
 
         train_metrics = [window.train.overall_metrics() for window in windows]
         test_metrics = [window.test.overall_metrics() for window in windows]
 
-        def avg(rows: list[dict[str, object]], key: str) -> float:
-            values = [float(row.get(key, 0.0)) for row in rows]
-            return round(mean(values), 6) if values else 0.0
+        # Basic averages
+        train_avg_wr = avg(train_metrics, "win_rate")
+        test_avg_wr = avg(test_metrics, "win_rate")
+        train_avg_pf = avg(train_metrics, "profit_factor")
+        test_avg_pf = avg(test_metrics, "profit_factor")
+        train_avg_r = avg(train_metrics, "avg_r")
+        test_avg_r = avg(test_metrics, "avg_r")
+        train_avg_dd = avg(train_metrics, "max_drawdown_r")
+        test_avg_dd = avg(test_metrics, "max_drawdown_r")
 
-        def total(rows: list[dict[str, object]], key: str) -> int:
-            return int(sum(int(row.get(key, 0)) for row in rows))
+        # Stability gaps
+        train_test_gap_pf = abs(train_avg_pf - test_avg_pf) / max(train_avg_pf, test_avg_pf, 0.01) if train_avg_pf > 0 and test_avg_pf > 0 else 0.0
+        train_test_gap_wr = abs(train_avg_wr - test_avg_wr)
+        train_test_gap_r = abs(train_avg_r - test_avg_r) / max(abs(train_avg_r), abs(test_avg_r), 0.01) if train_avg_r != 0 and test_avg_r != 0 else 0.0
+
+        # Consistency score (lower gap = higher consistency)
+        consistency_score = max(0.0, 1.0 - (train_test_gap_pf + train_test_gap_wr + train_test_gap_r) / 3.0)
 
         return {
             "window_count": len(windows),
-            "train_avg_win_rate": avg(train_metrics, "win_rate"),
-            "test_avg_win_rate": avg(test_metrics, "win_rate"),
-            "train_avg_profit_factor": avg(train_metrics, "profit_factor"),
-            "test_avg_profit_factor": avg(test_metrics, "profit_factor"),
-            "train_avg_r": avg(train_metrics, "avg_r"),
-            "test_avg_r": avg(test_metrics, "avg_r"),
-            "train_avg_drawdown_r": avg(train_metrics, "max_drawdown_r"),
-            "test_avg_drawdown_r": avg(test_metrics, "max_drawdown_r"),
+            "train_avg_win_rate": train_avg_wr,
+            "test_avg_win_rate": test_avg_wr,
+            "train_avg_profit_factor": train_avg_pf,
+            "test_avg_profit_factor": test_avg_pf,
+            "train_avg_r": train_avg_r,
+            "test_avg_r": test_avg_r,
+            "train_avg_drawdown_r": train_avg_dd,
+            "test_avg_drawdown_r": test_avg_dd,
             "train_total_trades": total(train_metrics, "trades"),
             "test_total_trades": total(test_metrics, "trades"),
+            # Extended metrics
+            "stability_metrics": {
+                "train_test_gap_pf": round(train_test_gap_pf, 4),
+                "train_test_gap_wr": round(train_test_gap_wr, 4),
+                "train_test_gap_r": round(train_test_gap_r, 4),
+                "consistency_score": round(consistency_score, 4),
+            },
+            "aggregate_metrics": {
+                "train_std_pf": std(train_metrics, "profit_factor"),
+                "test_std_pf": std(test_metrics, "profit_factor"),
+                "train_std_wr": std(train_metrics, "win_rate"),
+                "test_std_wr": std(test_metrics, "win_rate"),
+                "train_std_r": std(train_metrics, "avg_r"),
+                "test_std_r": std(test_metrics, "avg_r"),
+            },
         }
 
     def run(self) -> WalkForwardResult:

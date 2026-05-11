@@ -24,6 +24,12 @@ from backtest.walk_forward import WalkForwardResult, WalkForwardRunner
 from config import Settings
 from core.regime_analytics import analyze_regime_performance_from_run, export_regime_report
 from core.signal_engine import SignalEngine
+from core.meta_optimizer import (
+    MetaOptimizer,
+    OptimizationConfig,
+    run_meta_optimization,
+    MetaOptimizationResult,
+)
 from data.market_data import MarketDataClient
 from execution.news import NewsFilter
 
@@ -49,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wf-train-months", type=int, default=None, help="Walk-forward train window in months")
     parser.add_argument("--wf-test-months", type=int, default=None, help="Walk-forward test window in months")
     parser.add_argument("--wf-step-months", type=int, default=None, help="Walk-forward step size in months")
+    parser.add_argument("--meta-optimize", action="store_true", help="Run meta-optimization on training folds (recommendations only)")
+    parser.add_argument("--complexity-penalty", type=float, default=0.1, help="Complexity penalty for meta-optimization")
     parser.add_argument("--analyze-scores", action="store_true", help="Print score distribution and feature contribution analytics")
     parser.add_argument("--dynamic-threshold-analysis", action="store_true", help="Print rolling percentile threshold analytics from historical score stream")
     parser.add_argument("--news-csv", default=None, help="Optional historical news CSV for backtest filtering")
@@ -57,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validate-mitigation-entry", action="store_true", help="Compare market entry vs mitigation limit entry on the same historical data")
     parser.add_argument("--validation-output-dir", default=None, help="Optional export directory for validation results")
     parser.add_argument("--no-export", action="store_true", help="Do not write CSV/JSON export files")
+    parser.add_argument("--export-meta-report", action="store_true", help="Export meta-optimization report to JSON")
     return parser
 
 
@@ -363,6 +372,68 @@ def print_walk_forward_report(result: WalkForwardResult) -> None:
             test_trades=result.summary.get("test_total_trades", 0),
         )
     )
+    # Extended stability metrics
+    stability = result.summary.get("stability_metrics", {})
+    if stability:
+        print(
+            "Stability: gap_pf={gap_pf:.2%} gap_wr={gap_wr:.2%} gap_r={gap_r:.2%} "
+            "consistency={consistency:.2%}".format(
+                gap_pf=float(stability.get("train_test_gap_pf", 0.0)),
+                gap_wr=float(stability.get("train_test_gap_wr", 0.0)),
+                gap_r=float(stability.get("train_test_gap_r", 0.0)),
+                consistency=float(stability.get("consistency_score", 0.0)),
+            )
+        )
+    # Extended aggregate metrics
+    agg = result.summary.get("aggregate_metrics", {})
+    if agg:
+        print(
+            "StdDev: train_pf_std={train_std:.3f} test_pf_std={test_std:.3f} "
+            "train_wr_std={train_wr_std:.3f} test_wr_std={test_wr_std:.3f}".format(
+                train_std=float(agg.get("train_std_pf", 0.0)),
+                test_std=float(agg.get("test_std_pf", 0.0)),
+                train_wr_std=float(agg.get("train_std_wr", 0.0)),
+                test_wr_std=float(agg.get("test_std_wr", 0.0)),
+            )
+        )
+
+
+def print_meta_optimization_report(result: MetaOptimizationResult) -> None:
+    """Print meta-optimization results."""
+    print()
+    print("STABILITY METRICS")
+    print(
+        "Mean={mean:.2%} Std={std:.2%} BestFold={best} WorstFold={worst}".format(
+            mean=result.mean_stability,
+            std=result.std_stability,
+            best=result.best_fold_index,
+            worst=result.worst_fold_index,
+        )
+    )
+    print()
+    print("RECOMMENDATIONS (Not Auto-Applied)")
+    print(
+        "ScoreThreshold={threshold} ATR_Multiplier={atr}".format(
+            threshold=result.recommended_threshold,
+            atr=result.recommended_atr,
+        )
+    )
+    if result.recommended_weights:
+        print("WeightAdjustments: " + str(result.recommended_weights))
+    print()
+    print("FOLD BREAKDOWN")
+    for fold in result.fold_results:
+        test_trades = fold.test_metrics.get("trades", 0) if fold.test_metrics else 0
+        print(
+            "Fold={idx} train_trades={train} test_trades={test} "
+            "stability={stab:.2%} complexity_penalty={penalty:.2%}".format(
+                idx=fold.fold_index,
+                train=fold.train_result.overall_metrics().get("trades", 0),
+                test=test_trades,
+                stab=fold.stability_score,
+                penalty=fold.complexity_penalty,
+            )
+        )
 
 
 def _metrics_delta(baseline: dict[str, object], realistic: dict[str, object], key: str) -> float:
@@ -558,6 +629,9 @@ def main() -> None:
         news_feed = NeutralNewsFeed()
 
     walk_forward_enabled = args.walk_forward or settings.walk_forward_enabled
+    meta_optimize_enabled = args.meta_optimize
+    complexity_penalty = args.complexity_penalty
+    
     if walk_forward_enabled:
         signal_engine = build_signal_engine(
             market_data=market_data,
@@ -590,6 +664,31 @@ def main() -> None:
         )
         wf_result = wf_runner.run()
         print_walk_forward_report(wf_result)
+        
+        # Meta-optimization on walk-forward result (if enabled)
+        if meta_optimize_enabled:
+            print("\n" + "=" * 60)
+            print("META-OPTIMIZATION (Training Folds Only)")
+            print("=" * 60)
+            
+            opt_config = OptimizationConfig(
+                enabled=True,
+                optimize_threshold=True,
+                optimize_atr=False,
+                optimize_weights=False,
+                complexity_penalty=complexity_penalty,
+                min_train_trades=10,
+                grid_resolution="coarse",
+            )
+            meta_result = run_meta_optimization(engine, wf_result, opt_config)
+            print_meta_optimization_report(meta_result)
+            
+            if (settings.export_meta_report or args.export_meta_report) and not args.no_export:
+                report_path = (Path(args.output_dir) if args.output_dir else Path("reports")) / "meta_walkforward_report.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                exported = meta_result.export(report_path)
+                print(f"\nExported meta-optimization report: {exported}")
+        
         if settings.export_reports and not args.no_export:
             report_path = (Path(args.output_dir) if args.output_dir else Path("reports")) / "walk_forward.json"
             exported = wf_result.export(report_path)

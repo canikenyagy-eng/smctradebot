@@ -209,6 +209,7 @@ class Settings:
     dynamic_threshold_backtest_only: bool
     allow_live_dynamic_threshold: bool
     enable_feature_analytics: bool
+    export_meta_report: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -318,4 +319,5 @@ class Settings:
             dynamic_threshold_backtest_only=_parse_bool(os.getenv("DYNAMIC_THRESHOLD_BACKTEST_ONLY", "1"), default=True),
             allow_live_dynamic_threshold=_parse_bool(os.getenv("ALLOW_LIVE_DYNAMIC_THRESHOLD", "0"), default=False),
             enable_feature_analytics=_parse_bool(os.getenv("ENABLE_FEATURE_ANALYTICS", "0"), default=False),
+            export_meta_report=_parse_bool(os.getenv("EXPORT_META_REPORT", "0"), default=False),
         )
