@@ -11,6 +11,58 @@ from smc.regime import RegimeState
 from smc.trigger import TriggerContext
 
 
+@dataclass(frozen=True)
+class ScoreInputVector:
+    """
+    Structured score inputs for institutional pipeline.
+    Returns vector, NOT aggregated score.
+    
+    Components:
+    - regime_score: 0.0-1.0 (regime alignment with direction)
+    - structure_alignment: 0.0-1.0 (BOS/CHoCH quality)
+    - liquidity_quality: 0.0-1.0 (sweep quality)
+    - trigger_confidence: 0.0-1.0 (trigger strength)
+    """
+    regime_score: float
+    structure_alignment: float
+    liquidity_quality: float
+    trigger_confidence: float
+    
+    # Optional components (can be added later)
+    htf_alignment: float = 0.0
+    fvg_strength: float = 0.0
+    ob_strength: float = 0.0
+    
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "regime_score": self.regime_score,
+            "structure_alignment": self.structure_alignment,
+            "liquidity_quality": self.liquidity_quality,
+            "trigger_confidence": self.trigger_confidence,
+            "htf_alignment": self.htf_alignment,
+            "fvg_strength": self.fvg_strength,
+            "ob_strength": self.ob_strength,
+        }
+    
+    @property
+    def vector(self) -> list[float]:
+        """Raw vector for expectancy calculation."""
+        return [
+            self.regime_score,
+            self.structure_alignment,
+            self.liquidity_quality,
+            self.trigger_confidence,
+            self.htf_alignment,
+            self.fvg_strength,
+            self.ob_strength,
+        ]
+    
+    @property
+    def total(self) -> float:
+        """Legacy total for backward compatibility."""
+        return sum(self.vector) / len(self.vector) * 100
+
+
 # Regime-based activation multipliers
 # Each SMC component has different weight per regime
 REGIME_COMPONENT_WEIGHTS = {
@@ -475,3 +527,45 @@ def calculate_score_regime_aware(
     adjusted_breakdown = apply_regime_weights_to_breakdown(raw_breakdown, regime_label)
     
     return raw_breakdown, adjusted_breakdown
+
+
+def build_score_vector(
+    regime: RegimeState,
+    liquidity: LiquidityContext,
+    trigger: TriggerContext,
+    htf_bias: str = "NEUTRAL",
+    fvg_strength: float = 0.0,
+    ob_strength: float = 0.0,
+    side: str = "BUY",
+) -> ScoreInputVector:
+    """
+    Build structured score input vector from SMC components.
+    
+    This is the INSTITUTIONAL input format - returns vector, NOT aggregated score.
+    """
+    # Regime score: regime direction alignment
+    regime_dir = regime.direction.lower()
+    side_dir = "bullish" if side.upper() in ("BUY", "BULLISH") else "bearish"
+    regime_score = 1.0 if regime_dir == side_dir else 0.0
+    
+    # Structure alignment: from trigger strength
+    structure_alignment = trigger.strength if trigger else 0.0
+    
+    # Liquidity quality: from sweep count
+    liquidity_quality = min(1.0, len(liquidity.sweeps) / 3) if liquidity.sweeps else 0.0
+    
+    # Trigger confidence: event presence
+    trigger_confidence = 1.0 if trigger and trigger.structure_event else 0.0
+    
+    # HTF alignment
+    htf_alignment = 1.0 if htf_bias.upper() == side_dir.upper() else 0.0
+    
+    return ScoreInputVector(
+        regime_score=regime_score,
+        structure_alignment=structure_alignment,
+        liquidity_quality=liquidity_quality,
+        trigger_confidence=trigger_confidence,
+        htf_alignment=htf_alignment,
+        fvg_strength=fvg_strength,
+        ob_strength=ob_strength,
+    )
