@@ -31,6 +31,7 @@ class RegimeOutput:
     tradability_score: int
     volatility_estimate: float
     liquidity_quality: float
+    risk_multiplier: float
     
     @property
     def is_tradable(self) -> bool:
@@ -169,6 +170,7 @@ def classify_regime(frame: pd.DataFrame) -> RegimeOutput:
             tradability_score=0,
             volatility_estimate=0.5,
             liquidity_quality=0.5,
+            risk_multiplier=0.0,  # TRADABILITY = 0 for transition
         )
     
     # Compute metrics
@@ -230,6 +232,7 @@ def classify_regime(frame: pd.DataFrame) -> RegimeOutput:
         tradability_score=tradability,
         volatility_estimate=volatility,
         liquidity_quality=liquidity,
+        risk_multiplier=REGIME_MULTIPLIERS.get(regime, 1.0),
     )
 
 
