@@ -611,7 +611,13 @@ def main() -> None:
     score_analysis_requested = args.analyze_scores or args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
     dynamic_threshold_analysis_enabled = args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
 
-    market_data = MarketDataClient(history_limit=max(settings.history_limit, args.history_limit))
+    market_data = MarketDataClient(
+        history_limit=max(settings.history_limit, args.history_limit),
+        data_source=settings.data_source,
+        mt5_login=settings.mt5_login,
+        mt5_password=settings.mt5_password,
+        mt5_server=settings.mt5_server,
+    )
     live_news = NewsFilter(
         blackout_before_minutes=settings.news_blackout_before_minutes,
         blackout_after_minutes=settings.news_blackout_after_minutes,

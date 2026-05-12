@@ -128,6 +128,11 @@ class Settings:
     telegram_bot_token: str
     telegram_chat_id: str
     pairs: List[str]
+    data_source: str
+    mt5_login: int
+    mt5_password: str
+    mt5_server: str
+    mt5_path: str
     scan_interval_minutes: int
     walk_forward_enabled: bool
     wf_train_months: int
@@ -242,6 +247,14 @@ class Settings:
     # Execution Quality Settings
     execution_base_slippage: float
     execution_max_multiplier: float
+    
+    # Tick Execution Settings
+    enable_tick_execution: bool
+    enable_realistic_slippage: bool
+    enable_partial_fills: bool
+    execution_latency_ticks: int
+    execution_latency_ms: int
+    max_slippage_pips: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -262,6 +275,11 @@ class Settings:
                     "EURUSD,GBPUSD,USDJPY,GBPJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,EURGBP",
                 )
             ),
+            data_source=os.getenv("DATA_SOURCE", "yahoo").strip().lower(),
+            mt5_login=_parse_optional_int(os.getenv("MT5_LOGIN")),
+            mt5_password=os.getenv("MT5_PASSWORD", "").strip(),
+            mt5_server=os.getenv("MT5_SERVER", "").strip(),
+            mt5_path=os.getenv("MT5_PATH", "C:/Program Files/MetaTrader 5/terminal64.exe").strip(),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
             walk_forward_enabled=_parse_bool(os.getenv("WALK_FORWARD_ENABLED", "0"), default=False),
             wf_train_months=max(1, int(os.getenv("WF_TRAIN_MONTHS", "6"))),
@@ -384,4 +402,11 @@ class Settings:
             # Execution Quality Settings
             execution_base_slippage=max(0.0, float(os.getenv("EXECUTION_BASE_SLIPPAGE", "0.5"))),
             execution_max_multiplier=max(1.0, float(os.getenv("EXECUTION_MAX_MULTIPLIER", "2.0"))),
+            
+            # Tick Execution Settings
+            enable_tick_execution=_parse_bool(os.getenv("ENABLE_TICK_EXECUTION", "0"), default=False),
+            enable_realistic_slippage=_parse_bool(os.getenv("ENABLE_REALISTIC_SLIPPAGE", "0"), default=False),
+            enable_partial_fills=_parse_bool(os.getenv("ENABLE_PARTIAL_FILLS", "0"), default=False),
+            execution_latency_ticks=max(0, int(os.getenv("EXECUTION_LATENCY_TICKS", "0"))),
+            execution_latency_ms=max(0, int(os.getenv("EXECUTION_LATENCY_MS", "0"))),
         )
