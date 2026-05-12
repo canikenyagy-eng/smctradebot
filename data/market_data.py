@@ -1,10 +1,23 @@
+"""
+Market data client with configurable providers.
+
+This module provides backward-compatible access to market data
+with support for different data providers (Yahoo, MetaTrader5).
+"""
+
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 
 import pandas as pd
 import yfinance as yf
+
+from data.market_data_base import MarketDataProvider
+from data.provider_factory import MarketDataManager, get_default_manager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,8 +39,47 @@ TIMEFRAME_MAP: Dict[str, TimeframeConfig] = {
 
 
 class MarketDataClient:
-    def __init__(self, history_limit: int = 500) -> None:
+    """Market data client with configurable provider support.
+
+    This class provides backward compatibility while supporting
+    different data providers via configuration.
+    """
+
+    def __init__(
+        self,
+        history_limit: int = 500,
+        data_source: str = "yahoo",
+        mt5_login: int = 0,
+        mt5_password: str = "",
+        mt5_server: str = "",
+    ) -> None:
+        """Initialize market data client.
+
+        Args:
+            history_limit: Default maximum bars to return
+            data_source: Data provider ("yahoo" or "mt5")
+            mt5_login: MT5 login (if using mt5)
+            mt5_password: MT5 password (if using mt5)
+            mt5_server: MT5 server (if using mt5)
+        """
         self.history_limit = history_limit
+        self.data_source = data_source
+
+        # Configure MT5 if needed
+        mt5_config = None
+        if data_source == "mt5" and mt5_login > 0:
+            mt5_config = {
+                "login": mt5_login,
+                "password": mt5_password,
+                "server": mt5_server,
+            }
+
+        # Create provider manager
+        self._manager = get_default_manager(
+            data_source=data_source,
+            mt5_config=mt5_config,
+            history_limit=history_limit,
+        )
 
     @staticmethod
     def _normalize_pair(pair: str) -> str:
@@ -90,6 +142,28 @@ class MarketDataClient:
         )
 
     def fetch_ohlcv(self, pair: str, timeframe: str, limit: int | None = None) -> pd.DataFrame:
+        """Fetch OHLCV data for a trading pair.
+
+        Args:
+            pair: Trading pair (e.g., "EURUSD")
+            timeframe: Timeframe (e.g., "M5", "H1")
+            limit: Maximum bars to return
+
+        Returns:
+            DataFrame with OHLCV data
+
+        Raises:
+            ValueError: If timeframe is invalid or no data
+        """
+        # Use provider manager for MT5
+        if self.data_source == "mt5":
+            try:
+                return self._manager.fetch_ohlcv(pair, timeframe, limit)
+            except Exception as e:
+                logger.warning(f"MT5 fetch failed: {e}, falling back to Yahoo")
+                # Fall back to Yahoo
+
+        # Default: use Yahoo (existing behavior)
         tf_key = timeframe.upper()
         if tf_key not in TIMEFRAME_MAP:
             raise ValueError(f"Unsupported timeframe: {timeframe}")

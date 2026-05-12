@@ -21,7 +21,13 @@ def configure_logging() -> None:
 async def run_engine() -> None:
     settings = Settings.from_env()
 
-    market_data = MarketDataClient(history_limit=settings.history_limit)
+    market_data = MarketDataClient(
+        history_limit=settings.history_limit,
+        data_source=settings.data_source,
+        mt5_login=settings.mt5_login,
+        mt5_password=settings.mt5_password,
+        mt5_server=settings.mt5_server,
+    )
     news_filter = NewsFilter(
         blackout_before_minutes=settings.news_blackout_before_minutes,
         blackout_after_minutes=settings.news_blackout_after_minutes,
