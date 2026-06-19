@@ -18,6 +18,7 @@ from core.adaptive_weights import (
 from core.correlation import CorrelationCap, SignalCandidate
 from core.entry import EntryPlan, build_entry_plan
 from core.expectancy_engine_v3 import ExpectancyEngine, ExpectancySettings
+from core.live_profile import LiveProfileSelector, LiveProfileSettings
 from core.portfolio import CurrencyExposureRecord, exposure_expiry, signal_currency_deltas
 from core.scoring import ScoreBreakdown, calculate_score_details, score_session_timing
 from core.shadow import ShadowFeatureContext, analyze_shadow_context
@@ -28,6 +29,7 @@ from execution.news import NewsFilter
 from smc.liquidity import LiquidityContext, analyze_liquidity
 from smc.mtf import MTFContext, premium_discount_context
 from smc.regime import RegimeState, analyze_regime
+from smc.structure_quality import StructureQualitySettings, evaluate_structure_quality
 from smc.trigger import TriggerContext, analyze_trigger
 from smc.structure import StructureState, detect_bos_choch
 
@@ -142,6 +144,7 @@ class SignalEngine:
         portfolio_exposure_window_minutes: int = 240,
         enable_adaptive_weights: bool = False,
         adaptive_regime_weights: dict[str, dict[str, float]] | None = None,
+        adaptive_weights_preset: str = "default",
         enable_score_normalization: bool = False,
         score_normalization_method: str = "minmax",
         score_normalization_window: int = 200,
@@ -155,6 +158,26 @@ class SignalEngine:
         apply_dynamic_threshold: bool = False,
         dynamic_threshold_backtest_only: bool = True,
         allow_live_dynamic_threshold: bool = False,
+        enable_structure_quality_scoring: bool = False,
+        structure_quality_scan_bars: int = 300,
+        structure_quality_min_break_pips: float = 2.0,
+        structure_quality_level_bucket_pips: float = 2.0,
+        structure_quality_min_score_for_bonus: float = 60.0,
+        structure_quality_max_bonus: int = 8,
+        structure_quality_backtest_only: bool = True,
+        allow_live_structure_quality_scoring: bool = False,
+        structure_quality_allowed_regimes: tuple[str, ...] | list[str] | None = None,
+        structure_quality_allowed_pairs: tuple[str, ...] | list[str] | None = None,
+        structure_quality_excluded_pairs: tuple[str, ...] | list[str] | None = None,
+        live_exit_profile_enabled: bool = False,
+        live_exit_profile_preset: str = "default",
+        live_exit_use_regime_profiles: bool = True,
+        live_exit_volatility_rr_enabled: bool = False,
+        live_exit_volatility_rr_floor: float = 0.85,
+        live_exit_volatility_rr_cap: float = 1.25,
+        live_exit_liquidity_trailing_enabled: bool = False,
+        live_exit_liquidity_lookback_bars: int = 8,
+        live_exit_liquidity_buffer_pips: float = 1.0,
         # Trade Gate v2
         enable_trade_gate_v2: bool = False,
     ) -> None:
@@ -200,6 +223,7 @@ class SignalEngine:
         self._adaptive_weight_settings = AdaptiveWeightSettings(
             enabled=enable_adaptive_weights,
             regime_weights=adaptive_regime_weights,
+            preset=adaptive_weights_preset,
         )
         self._score_normalizer = ScoreNormalizer(
             ScoreNormalizationSettings(
@@ -222,6 +246,32 @@ class SignalEngine:
             )
         )
         self._last_recommended_threshold: int | None = None
+        self._structure_quality_settings = StructureQualitySettings(
+            enabled=enable_structure_quality_scoring,
+            scan_bars=structure_quality_scan_bars,
+            min_break_pips=structure_quality_min_break_pips,
+            level_bucket_pips=structure_quality_level_bucket_pips,
+            min_score_for_bonus=structure_quality_min_score_for_bonus,
+            max_bonus=structure_quality_max_bonus,
+            backtest_only=structure_quality_backtest_only,
+            allow_live=allow_live_structure_quality_scoring,
+            allowed_regimes=tuple(structure_quality_allowed_regimes or ()),
+            allowed_pairs=tuple(structure_quality_allowed_pairs or ()),
+            excluded_pairs=tuple(structure_quality_excluded_pairs or ()),
+        ).sanitized()
+        self._live_profile = LiveProfileSelector(
+            LiveProfileSettings(
+                enabled=live_exit_profile_enabled,
+                preset=live_exit_profile_preset,
+                use_regime_profiles=live_exit_use_regime_profiles,
+                volatility_rr_enabled=live_exit_volatility_rr_enabled,
+                volatility_rr_floor=live_exit_volatility_rr_floor,
+                volatility_rr_cap=live_exit_volatility_rr_cap,
+                liquidity_trailing_enabled=live_exit_liquidity_trailing_enabled,
+                liquidity_lookback_bars=live_exit_liquidity_lookback_bars,
+                liquidity_buffer_pips=live_exit_liquidity_buffer_pips,
+            )
+        )
         self.correlation_cap = CorrelationCap(
             threshold=pair_correlation_threshold,
             lookback=correlation_lookback,
@@ -317,6 +367,20 @@ class SignalEngine:
         ltf = self.market_data.fetch_ohlcv(pair, self.ltf_timeframe)
         trigger = self.market_data.fetch_ohlcv(pair, self.trigger_timeframe)
         return htf, ltf, trigger
+
+    @staticmethod
+    def _volatility_ratio(frame: pd.DataFrame, short_window: int = 20, long_window: int = 80) -> float:
+        if frame.empty:
+            return 1.0
+        closes = frame["close"].astype(float)
+        returns = closes.pct_change().dropna()
+        if len(returns) < max(short_window, long_window):
+            return 1.0
+        short_vol = float(returns.tail(short_window).std(ddof=0) or 0.0)
+        long_vol = float(returns.tail(long_window).std(ddof=0) or 0.0)
+        if long_vol <= 1e-9:
+            return 1.0
+        return max(0.5, min(1.5, short_vol / long_vol))
 
     @staticmethod
     def _pair_currencies(pair: str) -> tuple[str, str]:
@@ -580,6 +644,7 @@ class SignalEngine:
             smt_alignment=score.smt_alignment,
             shadow_bonus=score.shadow_bonus,
             total=max(0, min(100, int(total))),
+            structure_quality=score.structure_quality,
         )
 
     def _check_regime_filter(
@@ -882,6 +947,17 @@ class SignalEngine:
                 reference_frame=reference_trigger_frame if self.enable_smt_confirmation else None,
             )
 
+        structure_quality = evaluate_structure_quality(
+            pair=pair,
+            side=side,
+            frame=ltf,
+            structure_event=structure.event or "none",
+            swing_window=self.swing_window,
+            settings=self._structure_quality_settings,
+            runtime_mode=self.runtime_mode,
+            regime_label=regime_label,
+        )
+
         news = news_assessment or self.news_filter.evaluate_pair(pair)
         if not getattr(news, "allow_trading", False):
             details = {
@@ -895,6 +971,7 @@ class SignalEngine:
                     "order_block": shadow.order_block_summary if shadow is not None else "shadow disabled",
                     "smt": shadow.smt_summary if shadow is not None else "shadow disabled",
                 },
+                "structure_quality": structure_quality.to_dict(),
             }
             if emit_logs:
                 self._log_rejection(pair, "news", "high-impact uncertainty", **details)
@@ -921,6 +998,7 @@ class SignalEngine:
             signal_time=trigger_frame.index[-1].to_pydatetime(),
             shadow=shadow,
             adaptive_weights=self._adaptive_weight_settings if self.enable_adaptive_weights else None,
+            structure_quality_bonus=structure_quality.bonus,
         )
         normalized_score, normalization_meta = self._score_normalizer.transform(score.total, self.runtime_mode)
         if normalized_score != score.total:
@@ -968,6 +1046,7 @@ class SignalEngine:
                 "session": score.session_timing,
                 "adaptive_weights": score_meta.get("adaptive_weights"),
                 "normalization": normalization_meta,
+                "structure_quality": structure_quality.to_dict(),
                 "shadow": {
                     "fvg": score.fvg_alignment,
                     "order_block": score.order_block_alignment,
@@ -1049,11 +1128,16 @@ class SignalEngine:
                 recommended_threshold=recommended_threshold,
             )
 
+        live_profile_plan = self._live_profile.build_plan(
+            regime_label=regime_label,
+            fallback_rr=self.risk_reward,
+            volatility_ratio=self._volatility_ratio(trigger_frame),
+        )
         entry_plan: EntryPlan | None = build_entry_plan(
             side=side,
             current_price=current_price,
             ltf_frame=ltf,
-            risk_reward=self.risk_reward,
+            risk_reward=live_profile_plan.target_rr,
             shadow=shadow,
             enable_mitigation_entry=self.enable_mitigation_entry,
         )
@@ -1114,6 +1198,7 @@ class SignalEngine:
                 "score_breakdown_raw": score_meta.get("raw_components", {}),
                 "score_breakdown_weighted": score_meta.get("weighted_components", {}),
                 "adaptive_weights": score_meta.get("adaptive_weights", {}),
+                "structure_quality": structure_quality.to_dict(),
                 "score_normalization": normalization_meta,
                 "score_raw_total": score_meta.get("raw_total"),
                 "score_weighted_total": score_meta.get("weighted_total"),
@@ -1126,22 +1211,37 @@ class SignalEngine:
                         dynamic_active and self._dynamic_threshold_tracker.settings.apply_threshold
                     ),
                 },
+                "live_profile": live_profile_plan.to_dict(),
             },
         )
+        first_partial = live_profile_plan.first_partial()
         management = build_trade_management_plan(
             side=signal.side,
             entry=signal.entry,
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
-            partial_tp_enabled=self.partial_tp_enabled,
-            partial_tp_r=self.partial_tp_r,
-            partial_tp_fraction=self.partial_tp_fraction,
-            break_even_r=self.break_even_r,
-            trailing_enabled=self.trailing_enabled,
-            trailing_start_r=self.trailing_start_r,
-            trailing_lookback_bars=self.trailing_lookback_bars,
-            time_stop_bars=self.time_stop_bars,
+            partial_tp_enabled=bool(first_partial) if live_profile_plan.enabled else self.partial_tp_enabled,
+            partial_tp_r=first_partial.r_multiple if first_partial is not None else self.partial_tp_r,
+            partial_tp_fraction=first_partial.fraction if first_partial is not None else self.partial_tp_fraction,
+            break_even_r=live_profile_plan.break_even_r if live_profile_plan.enabled else self.break_even_r,
+            trailing_enabled=live_profile_plan.trailing_enabled if live_profile_plan.enabled else self.trailing_enabled,
+            trailing_start_r=live_profile_plan.trailing_start_r if live_profile_plan.enabled else self.trailing_start_r,
+            trailing_lookback_bars=(
+                live_profile_plan.trailing_lookback_bars if live_profile_plan.enabled else self.trailing_lookback_bars
+            ),
+            time_stop_bars=live_profile_plan.time_stop_bars if live_profile_plan.enabled else self.time_stop_bars,
         )
+        management_summary = management.summary
+        if live_profile_plan.enabled:
+            management_summary = (
+                f"profile={live_profile_plan.preset}/{live_profile_plan.regime_profile}"
+                f" | target_rr={live_profile_plan.target_rr:.2f}"
+                f" | vol_ratio={live_profile_plan.volatility_ratio:.2f}"
+                f" | {management.summary}"
+                f" | liq_trail={'ON' if live_profile_plan.liquidity_trailing_enabled else 'OFF'}"
+                f" lookback={live_profile_plan.liquidity_lookback_bars}"
+                f" buffer={live_profile_plan.liquidity_buffer_pips:.1f}p"
+            )
         signal = TradeSignal(
             symbol=signal.symbol,
             side=signal.side,
@@ -1151,7 +1251,7 @@ class SignalEngine:
             entry_mode=signal.entry_mode,
             entry_source=signal.entry_source,
             entry_summary=signal.entry_summary,
-            management_summary=management.summary,
+            management_summary=management_summary,
             partial_take_profit=management.partial_take_profit,
             partial_take_fraction=management.partial_take_fraction,
             break_even_r=management.break_even_r,
@@ -1171,7 +1271,7 @@ class SignalEngine:
             structure_trend=signal.structure_trend,
             generated_at=signal.generated_at,
             score_breakdown=signal.score_breakdown,
-            meta=dict(signal.meta),
+            meta={**dict(signal.meta), "live_profile": live_profile_plan.to_dict()},
         )
         if emit_logs:
             self._log_acceptance(signal, score)
@@ -1201,6 +1301,7 @@ class SignalEngine:
                 },
                 "adaptive_weights": score_meta.get("adaptive_weights"),
                 "score_normalization": normalization_meta,
+                "structure_quality": structure_quality.to_dict(),
                 "entry": {
                     "mode": entry_plan.mode,
                     "source": entry_plan.source,

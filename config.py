@@ -26,18 +26,11 @@ def _load_env_file(path: Path | None = None) -> None:
 
 def _parse_pairs(raw: str) -> List[str]:
     pairs = [item.strip().upper().replace("/", "") for item in raw.split(",") if item.strip()]
-    return pairs or [
-        "EURUSD",
-        "GBPUSD",
-        "USDJPY",
-        "GBPJPY",
-        "AUDUSD",
-        "USDCAD",
-        "USDCHF",
-        "NZDUSD",
-        "EURJPY",
-        "EURGBP",
-    ]
+    return pairs or ["EURUSD", "USDJPY"]
+
+
+def _parse_csv_upper(raw: str) -> List[str]:
+    return [item.strip().upper() for item in raw.split(",") if item.strip()]
 
 
 def _parse_pair_map(raw: str) -> dict[str, str]:
@@ -123,6 +116,30 @@ def _parse_adaptive_weights(raw: str | None) -> dict[str, dict[str, float]] | No
     return parsed or None
 
 
+def _parse_object_map(raw: str | None) -> dict[str, dict[str, object]] | None:
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    parsed: dict[str, dict[str, object]] = {}
+    for regime, value in payload.items():
+        if not isinstance(regime, str) or not isinstance(value, dict):
+            continue
+        key = regime.strip().lower()
+        if not key:
+            continue
+        parsed[key] = dict(value)
+    return parsed or None
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -134,6 +151,21 @@ class Settings:
     mt5_server: str
     mt5_path: str
     scan_interval_minutes: int
+    market_data_cache_enabled: bool
+    market_data_cache_dir: str
+    market_data_cache_ttl_hours: float
+    market_data_cache_mode: str
+    backtest_evaluation_step: int
+    enable_backtest_snapshot_cache: bool
+    backtest_snapshot_cache_max_entries: int
+    backtest_end_time: str
+    enable_backtest_trade_cache: bool
+    backtest_trade_cache_dir: str
+    backtest_trade_cache_version: str
+    backtest_account_enabled: bool
+    backtest_starting_balance: float
+    backtest_risk_per_trade: float
+    backtest_account_currency: str
     walk_forward_enabled: bool
     wf_train_months: int
     wf_test_months: int
@@ -200,6 +232,7 @@ class Settings:
     export_reports: bool
     export_regime_report: bool
     enable_adaptive_weights: bool
+    adaptive_weights_preset: str
     adaptive_regime_weights: dict[str, dict[str, float]] | None
     enable_score_normalization: bool
     score_normalization_method: str
@@ -215,15 +248,11 @@ class Settings:
     allow_live_dynamic_threshold: bool
     enable_feature_analytics: bool
     export_meta_report: bool
-    
-    # Prop Risk Engine v2 (Week 5)
     enable_regime_engine_v2: bool
     enable_prop_risk_v2: bool
     enable_portfolio_risk_v2: bool
     enable_trade_gate_v2: bool
     enable_execution_quality_model: bool
-    
-    # Prop Risk v2 Settings
     prop_base_risk: float
     prop_max_risk: float
     prop_dd_threshold_low: float
@@ -232,29 +261,72 @@ class Settings:
     prop_loss_2_reduction: float
     prop_loss_3_reduction: float
     prop_loss_4_pause: bool
-    
-    # Portfolio v2 Settings
     portfolio_max_currency_exposure: int
     portfolio_max_currency_gross: int
     portfolio_correlation_threshold: float
     portfolio_max_cluster: int
     portfolio_max_net_direction: int
-    
-    # Trade Gate Settings
     gate_min_regime_tradability: int
     gate_block_transition: bool
-    
-    # Execution Quality Settings
     execution_base_slippage: float
     execution_max_multiplier: float
-    
-    # Tick Execution Settings
     enable_tick_execution: bool
     enable_realistic_slippage: bool
     enable_partial_fills: bool
     execution_latency_ticks: int
     execution_latency_ms: int
     max_slippage_pips: float
+    enable_adaptive_sizing: bool
+    sizing_min_multiplier: float
+    sizing_max_multiplier: float
+    sizing_confidence_floor_score: int
+    sizing_confidence_ceiling_score: int
+    enable_meta_label: bool
+    meta_label_mode: str
+    meta_label_probability_threshold: float
+    meta_label_enable_size_adjustment: bool
+    meta_label_low_probability_multiplier: float
+    meta_label_high_probability_multiplier: float
+    meta_label_high_probability_threshold: float
+    enable_portfolio_layer: bool
+    portfolio_layer_mode: str
+    portfolio_layer_min_multiplier: float
+    portfolio_layer_max_multiplier: float
+    portfolio_layer_learning_window: int
+    portfolio_layer_min_trades_per_sleeve: int
+    portfolio_layer_max_sleeve_concentration: float
+    enable_smc_research_features: bool
+    smc_structure_scan_bars: int
+    smc_structure_min_break_pips: float
+    smc_structure_level_bucket_pips: float
+    smc_ob_lookback_bars: int
+    smc_ob_max_age_bars: int
+    smc_ob_max_width_pips: float
+    smc_ob_max_distance_pips: float
+    smc_relaxed_fvg_lookback_bars: int
+    smc_relaxed_fvg_min_gap_pips: float
+    smc_relaxed_fvg_max_distance_pips: float
+    enable_structure_quality_scoring: bool
+    structure_quality_min_score_for_bonus: float
+    structure_quality_max_bonus: int
+    structure_quality_backtest_only: bool
+    allow_live_structure_quality_scoring: bool
+    structure_quality_allowed_regimes: List[str]
+    structure_quality_allowed_pairs: List[str]
+    structure_quality_excluded_pairs: List[str]
+    enable_exit_engine: bool
+    exit_profile_preset: str
+    exit_use_regime_profiles: bool
+    exit_profile_overrides: dict[str, dict[str, object]] | None
+    exit_atr_trailing_enabled: bool
+    exit_atr_trailing_period: int
+    exit_atr_trailing_multiplier: float
+    exit_liquidity_trailing_enabled: bool
+    exit_liquidity_lookback_bars: int
+    exit_liquidity_buffer_pips: float
+    exit_volatility_rr_enabled: bool
+    exit_volatility_rr_floor: float
+    exit_volatility_rr_cap: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -272,7 +344,7 @@ class Settings:
             pairs=_parse_pairs(
                 os.getenv(
                     "PAIRS",
-                    "EURUSD,GBPUSD,USDJPY,GBPJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,EURJPY,EURGBP",
+                    "EURUSD,USDJPY",
                 )
             ),
             data_source=os.getenv("DATA_SOURCE", "yahoo").strip().lower(),
@@ -281,6 +353,21 @@ class Settings:
             mt5_server=os.getenv("MT5_SERVER", "").strip(),
             mt5_path=os.getenv("MT5_PATH", "C:/Program Files/MetaTrader 5/terminal64.exe").strip(),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
+            market_data_cache_enabled=_parse_bool(os.getenv("MARKET_DATA_CACHE_ENABLED", "1"), default=True),
+            market_data_cache_dir=os.getenv("MARKET_DATA_CACHE_DIR", "data/cache/ohlcv").strip(),
+            market_data_cache_ttl_hours=max(0.0, float(os.getenv("MARKET_DATA_CACHE_TTL_HOURS", "12"))),
+            market_data_cache_mode=os.getenv("MARKET_DATA_CACHE_MODE", "read_through").strip().lower(),
+            backtest_evaluation_step=max(1, int(os.getenv("BACKTEST_EVALUATION_STEP", "1"))),
+            enable_backtest_snapshot_cache=_parse_bool(os.getenv("ENABLE_BACKTEST_SNAPSHOT_CACHE", "1"), default=True),
+            backtest_snapshot_cache_max_entries=max(1000, int(os.getenv("BACKTEST_SNAPSHOT_CACHE_MAX_ENTRIES", "50000"))),
+            backtest_end_time=os.getenv("BACKTEST_END_TIME", "").strip(),
+            enable_backtest_trade_cache=_parse_bool(os.getenv("ENABLE_BACKTEST_TRADE_CACHE", "0"), default=False),
+            backtest_trade_cache_dir=os.getenv("BACKTEST_TRADE_CACHE_DIR", "data/cache/backtests").strip(),
+            backtest_trade_cache_version=os.getenv("BACKTEST_TRADE_CACHE_VERSION", "trade_cache_v1").strip(),
+            backtest_account_enabled=_parse_bool(os.getenv("BACKTEST_ACCOUNT_ENABLED", "1"), default=True),
+            backtest_starting_balance=max(0.0, float(os.getenv("BACKTEST_STARTING_BALANCE", "1000"))),
+            backtest_risk_per_trade=max(0.0, float(os.getenv("BACKTEST_RISK_PER_TRADE", "50"))),
+            backtest_account_currency=os.getenv("BACKTEST_ACCOUNT_CURRENCY", "USD").strip().upper(),
             walk_forward_enabled=_parse_bool(os.getenv("WALK_FORWARD_ENABLED", "0"), default=False),
             wf_train_months=max(1, int(os.getenv("WF_TRAIN_MONTHS", "6"))),
             wf_test_months=max(1, int(os.getenv("WF_TEST_MONTHS", "1"))),
@@ -355,6 +442,7 @@ class Settings:
             export_reports=_parse_bool(os.getenv("EXPORT_REPORTS", "1"), default=True),
             export_regime_report=_parse_bool(os.getenv("EXPORT_REGIME_REPORT", "0"), default=False),
             enable_adaptive_weights=_parse_bool(os.getenv("ENABLE_ADAPTIVE_WEIGHTS", "0"), default=False),
+            adaptive_weights_preset=os.getenv("ADAPTIVE_WEIGHTS_PRESET", "default").strip().lower(),
             adaptive_regime_weights=_parse_adaptive_weights(os.getenv("ADAPTIVE_WEIGHTS_JSON")),
             enable_score_normalization=_parse_bool(os.getenv("ENABLE_SCORE_NORMALIZATION", "0"), default=False),
             score_normalization_method=os.getenv("SCORE_NORMALIZATION_METHOD", "minmax").strip().lower(),
@@ -370,15 +458,11 @@ class Settings:
             allow_live_dynamic_threshold=_parse_bool(os.getenv("ALLOW_LIVE_DYNAMIC_THRESHOLD", "1"), default=True),
             enable_feature_analytics=_parse_bool(os.getenv("ENABLE_FEATURE_ANALYTICS", "0"), default=False),
             export_meta_report=_parse_bool(os.getenv("EXPORT_META_REPORT", "0"), default=False),
-            
-            # Prop Risk Engine v2 flags
             enable_regime_engine_v2=_parse_bool(os.getenv("ENABLE_REGIME_ENGINE_V2", "0"), default=False),
             enable_prop_risk_v2=_parse_bool(os.getenv("ENABLE_PROP_RISK_V2", "0"), default=False),
             enable_portfolio_risk_v2=_parse_bool(os.getenv("ENABLE_PORTFOLIO_RISK_V2", "0"), default=False),
             enable_trade_gate_v2=_parse_bool(os.getenv("ENABLE_TRADE_GATE_V2", "0"), default=False),
             enable_execution_quality_model=_parse_bool(os.getenv("ENABLE_EXECUTION_QUALITY_MODEL", "0"), default=False),
-            
-            # Prop Risk v2 Settings
             prop_base_risk=max(0.1, float(os.getenv("PROP_BASE_RISK", "1.0"))),
             prop_max_risk=max(0.1, float(os.getenv("PROP_MAX_RISK", "2.0"))),
             prop_dd_threshold_low=max(0.0, float(os.getenv("PROP_DD_THRESHOLD_LOW", "3.0"))),
@@ -387,26 +471,75 @@ class Settings:
             prop_loss_2_reduction=max(0.0, min(1.0, float(os.getenv("PROP_LOSS_2_REDUCTION", "0.8")))),
             prop_loss_3_reduction=max(0.0, min(1.0, float(os.getenv("PROP_LOSS_3_REDUCTION", "0.6")))),
             prop_loss_4_pause=_parse_bool(os.getenv("PROP_LOSS_4_PAUSE", "1"), default=True),
-            
-            # Portfolio v2 Settings
             portfolio_max_currency_exposure=max(0, int(os.getenv("PORTFOLIO_MAX_CURRENCY_EXPOSURE", "2"))),
             portfolio_max_currency_gross=max(0, int(os.getenv("PORTFOLIO_MAX_CURRENCY_GROSS", "4"))),
             portfolio_correlation_threshold=max(0.0, min(0.99, float(os.getenv("PORTFOLIO_CORRELATION_THRESHOLD", "0.82")))),
             portfolio_max_cluster=max(0, int(os.getenv("PORTFOLIO_MAX_CLUSTER", "3"))),
             portfolio_max_net_direction=max(0, int(os.getenv("PORTFOLIO_MAX_NET_DIRECTION", "4"))),
-            
-            # Trade Gate Settings
             gate_min_regime_tradability=max(0, min(100, int(os.getenv("GATE_MIN_REGIME_TRADABILITY", "30")))),
             gate_block_transition=_parse_bool(os.getenv("GATE_BLOCK_TRANSITION", "1"), default=True),
-            
-            # Execution Quality Settings
             execution_base_slippage=max(0.0, float(os.getenv("EXECUTION_BASE_SLIPPAGE", "0.5"))),
             execution_max_multiplier=max(1.0, float(os.getenv("EXECUTION_MAX_MULTIPLIER", "2.0"))),
-            
-            # Tick Execution Settings
             enable_tick_execution=_parse_bool(os.getenv("ENABLE_TICK_EXECUTION", "0"), default=False),
             enable_realistic_slippage=_parse_bool(os.getenv("ENABLE_REALISTIC_SLIPPAGE", "0"), default=False),
             enable_partial_fills=_parse_bool(os.getenv("ENABLE_PARTIAL_FILLS", "0"), default=False),
             execution_latency_ticks=max(0, int(os.getenv("EXECUTION_LATENCY_TICKS", "0"))),
             execution_latency_ms=max(0, int(os.getenv("EXECUTION_LATENCY_MS", "0"))),
+            enable_adaptive_sizing=_parse_bool(os.getenv("ENABLE_ADAPTIVE_SIZING", "0"), default=False),
+            sizing_min_multiplier=max(0.05, float(os.getenv("SIZING_MIN_MULTIPLIER", "0.40"))),
+            sizing_max_multiplier=max(0.05, float(os.getenv("SIZING_MAX_MULTIPLIER", "1.50"))),
+            sizing_confidence_floor_score=max(0, min(100, int(os.getenv("SIZING_CONFIDENCE_FLOOR_SCORE", "65")))),
+            sizing_confidence_ceiling_score=max(1, min(100, int(os.getenv("SIZING_CONFIDENCE_CEILING_SCORE", "90")))),
+            enable_meta_label=_parse_bool(os.getenv("ENABLE_META_LABEL", "0"), default=False),
+            meta_label_mode=os.getenv("META_LABEL_MODE", "analysis_only").strip().lower(),
+            meta_label_probability_threshold=max(0.0, min(1.0, float(os.getenv("META_LABEL_PROBABILITY_THRESHOLD", "0.55")))),
+            meta_label_enable_size_adjustment=_parse_bool(os.getenv("META_LABEL_ENABLE_SIZE_ADJUSTMENT", "0"), default=False),
+            meta_label_low_probability_multiplier=max(0.05, float(os.getenv("META_LABEL_LOW_PROBABILITY_MULTIPLIER", "0.75"))),
+            meta_label_high_probability_multiplier=max(0.05, float(os.getenv("META_LABEL_HIGH_PROBABILITY_MULTIPLIER", "1.10"))),
+            meta_label_high_probability_threshold=max(0.0, min(1.0, float(os.getenv("META_LABEL_HIGH_PROBABILITY_THRESHOLD", "0.72")))),
+            enable_portfolio_layer=_parse_bool(os.getenv("ENABLE_PORTFOLIO_LAYER", "0"), default=False),
+            portfolio_layer_mode=os.getenv("PORTFOLIO_LAYER_MODE", "analysis_only").strip().lower(),
+            portfolio_layer_min_multiplier=max(0.05, float(os.getenv("PORTFOLIO_LAYER_MIN_MULTIPLIER", "0.70"))),
+            portfolio_layer_max_multiplier=max(0.05, float(os.getenv("PORTFOLIO_LAYER_MAX_MULTIPLIER", "1.25"))),
+            portfolio_layer_learning_window=max(5, int(os.getenv("PORTFOLIO_LAYER_LEARNING_WINDOW", "30"))),
+            portfolio_layer_min_trades_per_sleeve=max(1, int(os.getenv("PORTFOLIO_LAYER_MIN_TRADES_PER_SLEEVE", "5"))),
+            portfolio_layer_max_sleeve_concentration=max(0.10, min(0.95, float(os.getenv("PORTFOLIO_LAYER_MAX_SLEEVE_CONCENTRATION", "0.55")))),
+            enable_smc_research_features=_parse_bool(os.getenv("ENABLE_SMC_RESEARCH_FEATURES", "0"), default=False),
+            smc_structure_scan_bars=max(80, int(os.getenv("SMC_STRUCTURE_SCAN_BARS", "300"))),
+            smc_structure_min_break_pips=max(0.0, float(os.getenv("SMC_STRUCTURE_MIN_BREAK_PIPS", "2.0"))),
+            smc_structure_level_bucket_pips=max(0.1, float(os.getenv("SMC_STRUCTURE_LEVEL_BUCKET_PIPS", "2.0"))),
+            smc_ob_lookback_bars=max(50, int(os.getenv("SMC_OB_LOOKBACK_BARS", "300"))),
+            smc_ob_max_age_bars=max(1, int(os.getenv("SMC_OB_MAX_AGE_BARS", "300"))),
+            smc_ob_max_width_pips=max(0.1, float(os.getenv("SMC_OB_MAX_WIDTH_PIPS", "20.0"))),
+            smc_ob_max_distance_pips=max(0.1, float(os.getenv("SMC_OB_MAX_DISTANCE_PIPS", "30.0"))),
+            smc_relaxed_fvg_lookback_bars=max(50, int(os.getenv("SMC_RELAXED_FVG_LOOKBACK_BARS", "300"))),
+            smc_relaxed_fvg_min_gap_pips=max(0.0, float(os.getenv("SMC_RELAXED_FVG_MIN_GAP_PIPS", "0.1"))),
+            smc_relaxed_fvg_max_distance_pips=max(0.1, float(os.getenv("SMC_RELAXED_FVG_MAX_DISTANCE_PIPS", "30.0"))),
+            enable_structure_quality_scoring=_parse_bool(os.getenv("ENABLE_STRUCTURE_QUALITY_SCORING", "0"), default=False),
+            structure_quality_min_score_for_bonus=max(
+                0.0,
+                min(100.0, float(os.getenv("STRUCTURE_QUALITY_MIN_SCORE_FOR_BONUS", "60.0"))),
+            ),
+            structure_quality_max_bonus=max(0, min(20, int(os.getenv("STRUCTURE_QUALITY_MAX_BONUS", "8")))),
+            structure_quality_backtest_only=_parse_bool(os.getenv("STRUCTURE_QUALITY_BACKTEST_ONLY", "1"), default=True),
+            allow_live_structure_quality_scoring=_parse_bool(
+                os.getenv("ALLOW_LIVE_STRUCTURE_QUALITY_SCORING", "0"),
+                default=False,
+            ),
+            structure_quality_allowed_regimes=_parse_csv_upper(os.getenv("STRUCTURE_QUALITY_ALLOWED_REGIMES", "")),
+            structure_quality_allowed_pairs=_parse_pairs(os.getenv("STRUCTURE_QUALITY_ALLOWED_PAIRS", "")) if os.getenv("STRUCTURE_QUALITY_ALLOWED_PAIRS", "").strip() else [],
+            structure_quality_excluded_pairs=_parse_pairs(os.getenv("STRUCTURE_QUALITY_EXCLUDED_PAIRS", "")) if os.getenv("STRUCTURE_QUALITY_EXCLUDED_PAIRS", "").strip() else [],
+            enable_exit_engine=_parse_bool(os.getenv("ENABLE_EXIT_ENGINE", "1"), default=True),
+            exit_profile_preset=os.getenv("EXIT_PROFILE_PRESET", "m15_vol_liq_v1").strip().lower(),
+            exit_use_regime_profiles=_parse_bool(os.getenv("EXIT_USE_REGIME_PROFILES", "1"), default=True),
+            exit_profile_overrides=_parse_object_map(os.getenv("EXIT_PROFILE_OVERRIDES_JSON")),
+            exit_atr_trailing_enabled=_parse_bool(os.getenv("EXIT_ATR_TRAILING_ENABLED", "0"), default=False),
+            exit_atr_trailing_period=max(2, int(os.getenv("EXIT_ATR_TRAILING_PERIOD", "14"))),
+            exit_atr_trailing_multiplier=max(0.1, float(os.getenv("EXIT_ATR_TRAILING_MULTIPLIER", "1.5"))),
+            exit_liquidity_trailing_enabled=_parse_bool(os.getenv("EXIT_LIQUIDITY_TRAILING_ENABLED", "1"), default=True),
+            exit_liquidity_lookback_bars=max(2, int(os.getenv("EXIT_LIQUIDITY_LOOKBACK_BARS", "8"))),
+            exit_liquidity_buffer_pips=max(0.0, float(os.getenv("EXIT_LIQUIDITY_BUFFER_PIPS", "1.0"))),
+            exit_volatility_rr_enabled=_parse_bool(os.getenv("EXIT_VOLATILITY_RR_ENABLED", "1"), default=True),
+            exit_volatility_rr_floor=max(0.1, float(os.getenv("EXIT_VOLATILITY_RR_FLOOR", "0.75"))),
+            exit_volatility_rr_cap=max(0.1, float(os.getenv("EXIT_VOLATILITY_RR_CAP", "1.40"))),
         )

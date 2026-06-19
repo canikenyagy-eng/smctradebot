@@ -11,6 +11,7 @@ import pandas as pd
 
 from analytics.score_distribution import analyze_dynamic_threshold, analyze_rejections, analyze_scores
 from backtest.engine import BacktestEngine, BacktestPairReport, BacktestRunResult
+from backtest.portfolio_layer import PortfolioLayerState
 from backtest.risk import EquityProtectionState
 
 
@@ -19,6 +20,11 @@ METRIC_KEYS = (
     "win_rate",
     "avg_r",
     "median_r",
+    "avg_win_r",
+    "avg_loss_r",
+    "payoff_ratio",
+    "expectancy_r",
+    "sharpe_r",
     "profit_factor",
     "max_drawdown_r",
     "avg_score",
@@ -42,6 +48,11 @@ METRIC_KEYS = (
     "avg_spread_cost_r",
     "avg_delay_cost_r",
     "avg_risk_multiplier",
+    "avg_sizing_multiplier",
+    "avg_meta_probability",
+    "meta_accepted_count",
+    "avg_meta_size_multiplier",
+    "avg_portfolio_multiplier",
     "realistic_execution_trades",
     "fill_rate",
     "partial_fill_rate",
@@ -209,16 +220,17 @@ def build_score_distribution_report(
 
     payload: dict[str, Any] = {
         "score_distribution": analyze_scores(
-            run_result.trades,
+            run_result.score_observations,
             threshold=min_score,
             total_evaluations=evaluations,
+            accepted_count=len(run_result.trades),
             bucket_size=bucket_size,
         ),
         "rejections": analyze_rejections(rejection_counts),
     }
     if dynamic_threshold_enabled:
         payload["dynamic_threshold"] = analyze_dynamic_threshold(
-            run_result.trades,
+            run_result.score_observations,
             percentile=threshold_percentile,
             rolling_window=threshold_window,
         )
@@ -289,6 +301,7 @@ class BacktestValidationRunner:
             if self.baseline_engine.equity_protection_settings.enabled
             else None
         )
+        baseline_portfolio = PortfolioLayerState(self.baseline_engine.portfolio_layer_settings)
         for pair in pairs:
             error = errors.get(pair)
             if error is not None:
@@ -308,6 +321,7 @@ class BacktestValidationRunner:
                         reference_pair=reference_pair,
                         reference_trigger=reference_trigger,
                         equity_state=baseline_equity,
+                        portfolio_state=baseline_portfolio,
                     )
                 )
             except Exception as exc:
@@ -321,6 +335,7 @@ class BacktestValidationRunner:
             if self.shadow_engine.equity_protection_settings.enabled
             else None
         )
+        shadow_portfolio = PortfolioLayerState(self.shadow_engine.portfolio_layer_settings)
         for pair in pairs:
             error = errors.get(pair)
             if error is not None:
@@ -340,6 +355,7 @@ class BacktestValidationRunner:
                         reference_pair=reference_pair,
                         reference_trigger=reference_trigger,
                         equity_state=shadow_equity,
+                        portfolio_state=shadow_portfolio,
                     )
                 )
             except Exception as exc:
@@ -373,6 +389,7 @@ class BacktestValidationRunner:
                 "history_limit": self.baseline_engine.history_limit,
                 "max_hold_bars": self.baseline_engine.max_hold_bars,
                 "warmup_bars": self.baseline_engine.warmup_bars,
+                "evaluation_step": self.baseline_engine.evaluation_step,
                 "min_score": self.baseline_engine.signal_engine.min_score,
                 "risk_reward": self.baseline_engine.signal_engine.risk_reward,
                 "swing_window": self.baseline_engine.signal_engine.swing_window,
@@ -423,6 +440,21 @@ class BacktestValidationRunner:
                 "drawdown_risk_reduction_factor": self.baseline_engine.equity_protection_settings.drawdown_risk_reduction_factor,
                 "max_consecutive_losses": self.baseline_engine.equity_protection_settings.max_consecutive_losses,
                 "min_risk_multiplier": self.baseline_engine.equity_protection_settings.min_risk_multiplier,
+                "enable_exit_engine": self.baseline_engine.exit_settings.enabled,
+                "exit_use_regime_profiles": self.baseline_engine.exit_settings.use_regime_profiles,
+                "exit_profile_overrides": self.baseline_engine.exit_settings.profile_overrides,
+                "exit_atr_trailing_enabled": self.baseline_engine.exit_settings.atr_trailing_enabled,
+                "exit_liquidity_trailing_enabled": self.baseline_engine.exit_settings.liquidity_trailing_enabled,
+                "exit_volatility_rr_enabled": self.baseline_engine.exit_settings.volatility_rr_enabled,
+                "enable_adaptive_sizing": self.baseline_engine.sizing_settings.enabled,
+                "sizing_min_multiplier": self.baseline_engine.sizing_settings.min_multiplier,
+                "sizing_max_multiplier": self.baseline_engine.sizing_settings.max_multiplier,
+                "enable_meta_label": self.baseline_engine.meta_label_settings.enabled,
+                "meta_label_mode": self.baseline_engine.meta_label_settings.mode,
+                "meta_label_probability_threshold": self.baseline_engine.meta_label_settings.probability_threshold,
+                "meta_label_enable_size_adjustment": self.baseline_engine.meta_label_settings.enable_size_adjustment,
+                "enable_portfolio_layer": self.baseline_engine.portfolio_layer_settings.enabled,
+                "portfolio_layer_mode": self.baseline_engine.portfolio_layer_settings.mode,
             },
             started_at=baseline_started,
             finished_at=baseline_finished,
@@ -455,6 +487,7 @@ class BacktestValidationRunner:
                 "history_limit": self.shadow_engine.history_limit,
                 "max_hold_bars": self.shadow_engine.max_hold_bars,
                 "warmup_bars": self.shadow_engine.warmup_bars,
+                "evaluation_step": self.shadow_engine.evaluation_step,
                 "min_score": self.shadow_engine.signal_engine.min_score,
                 "risk_reward": self.shadow_engine.signal_engine.risk_reward,
                 "swing_window": self.shadow_engine.signal_engine.swing_window,
@@ -505,6 +538,21 @@ class BacktestValidationRunner:
                 "drawdown_risk_reduction_factor": self.shadow_engine.equity_protection_settings.drawdown_risk_reduction_factor,
                 "max_consecutive_losses": self.shadow_engine.equity_protection_settings.max_consecutive_losses,
                 "min_risk_multiplier": self.shadow_engine.equity_protection_settings.min_risk_multiplier,
+                "enable_exit_engine": self.shadow_engine.exit_settings.enabled,
+                "exit_use_regime_profiles": self.shadow_engine.exit_settings.use_regime_profiles,
+                "exit_profile_overrides": self.shadow_engine.exit_settings.profile_overrides,
+                "exit_atr_trailing_enabled": self.shadow_engine.exit_settings.atr_trailing_enabled,
+                "exit_liquidity_trailing_enabled": self.shadow_engine.exit_settings.liquidity_trailing_enabled,
+                "exit_volatility_rr_enabled": self.shadow_engine.exit_settings.volatility_rr_enabled,
+                "enable_adaptive_sizing": self.shadow_engine.sizing_settings.enabled,
+                "sizing_min_multiplier": self.shadow_engine.sizing_settings.min_multiplier,
+                "sizing_max_multiplier": self.shadow_engine.sizing_settings.max_multiplier,
+                "enable_meta_label": self.shadow_engine.meta_label_settings.enabled,
+                "meta_label_mode": self.shadow_engine.meta_label_settings.mode,
+                "meta_label_probability_threshold": self.shadow_engine.meta_label_settings.probability_threshold,
+                "meta_label_enable_size_adjustment": self.shadow_engine.meta_label_settings.enable_size_adjustment,
+                "enable_portfolio_layer": self.shadow_engine.portfolio_layer_settings.enabled,
+                "portfolio_layer_mode": self.shadow_engine.portfolio_layer_settings.mode,
             },
             started_at=shadow_started,
             finished_at=shadow_finished,

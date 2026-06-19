@@ -11,6 +11,7 @@ import pandas as pd
 
 from backtest.engine import BacktestEngine, BacktestPairReport, BacktestRunResult
 from backtest.execution import build_rng
+from backtest.portfolio_layer import PortfolioLayerState
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ class WalkForwardRunner:
         reports: list[BacktestPairReport] = []
         segment_pairs = sorted(pair_frames.keys())
         universe = set(segment_pairs)
+        portfolio_state = PortfolioLayerState(self.engine.portfolio_layer_settings)
 
         started_at = datetime.now(timezone.utc)
         for pair in segment_pairs:
@@ -196,6 +198,7 @@ class WalkForwardRunner:
                 trigger_slice,
                 reference_pair=reference_pair,
                 reference_trigger=reference_trigger,
+                portfolio_state=portfolio_state,
             )
             reports.append(report)
         finished_at = datetime.now(timezone.utc)
@@ -209,6 +212,7 @@ class WalkForwardRunner:
                 "ltf_timeframe": self.timeframe_config.get("ltf"),
                 "htf_timeframe": self.timeframe_config.get("htf"),
                 "trigger_timeframe": self.timeframe_config.get("trigger"),
+                "evaluation_step": self.engine.evaluation_step,
                 "train_months": self.train_months,
                 "test_months": self.test_months,
                 "step_months": self.step_months,

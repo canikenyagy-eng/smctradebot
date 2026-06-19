@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from analytics.feature_analysis import (
@@ -10,10 +11,18 @@ from analytics.feature_analysis import (
     compute_correlation_with_pnl,
     compute_win_vs_loss_contribution,
 )
+from analytics.monte_carlo import MonteCarloSettings, run_monte_carlo
+from backtest.exit_engine import AdaptiveExitSettings
 from backtest.execution import RealisticExecutionSettings
-from backtest.engine import BacktestEngine
+from backtest.engine import BacktestAccountSettings, BacktestEngine
+from backtest.meta_label import MetaLabelSettings
 from backtest.news import HistoricalNewsFeed, NeutralNewsFeed
+from backtest.portfolio_layer import PortfolioLayerSettings
 from backtest.risk import ATRRiskSettings, EquityProtectionSettings
+from backtest.smc_research_features import SMCResearchFeatureSettings
+from backtest.sizing import AdaptiveSizingSettings
+from backtest.snapshot_cache import SnapshotCacheSettings
+from backtest.trade_cache import BacktestTradeCache, TradeCacheSettings
 from backtest.validation import (
     BacktestValidationResult,
     BacktestValidationRunner,
@@ -30,7 +39,7 @@ from core.meta_optimizer import (
     run_meta_optimization,
     MetaOptimizationResult,
 )
-from data.market_data import MarketDataClient
+from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
 
 
@@ -51,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-limit", type=int, default=3000, help="Historical bars to load per timeframe")
     parser.add_argument("--max-hold-bars", type=int, default=48, help="Maximum bars to hold each trade")
     parser.add_argument("--warmup-bars", type=int, default=120, help="Warmup bars before evaluation starts")
+    parser.add_argument("--evaluation-step", type=int, default=None, help="Backtest-only bar step between signal evaluations; 1 preserves exact behavior")
+    parser.add_argument("--end-time", default=None, help="Optional fixed historical end timestamp, e.g. 2026-06-15T00:00:00Z")
+    parser.add_argument("--account-balance", type=float, default=None, help="Backtest starting balance for USD accounting")
+    parser.add_argument("--risk-per-trade", type=float, default=None, help="Fixed cash risk per 1R trade for backtest accounting")
+    parser.add_argument("--account-currency", default=None, help="Backtest account currency label, e.g. USD")
+    parser.add_argument("--disable-account-report", action="store_true", help="Disable fixed-cash account reporting")
     parser.add_argument("--walk-forward", action="store_true", help="Run walk-forward validation")
     parser.add_argument("--wf-train-months", type=int, default=None, help="Walk-forward train window in months")
     parser.add_argument("--wf-test-months", type=int, default=None, help="Walk-forward test window in months")
@@ -59,8 +74,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--complexity-penalty", type=float, default=0.1, help="Complexity penalty for meta-optimization")
     parser.add_argument("--analyze-scores", action="store_true", help="Print score distribution and feature contribution analytics")
     parser.add_argument("--dynamic-threshold-analysis", action="store_true", help="Print rolling percentile threshold analytics from historical score stream")
+    parser.add_argument("--monte-carlo", action="store_true", help="Run Monte Carlo bootstrap analysis on backtest R-multiples")
+    parser.add_argument("--mc-iterations", type=int, default=2000, help="Monte Carlo bootstrap iterations")
+    parser.add_argument("--mc-seed", type=int, default=42, help="Monte Carlo random seed")
+    parser.add_argument("--mc-ruin-dd", type=float, default=10.0, help="Drawdown threshold in R for risk-of-ruin estimate")
     parser.add_argument("--news-csv", default=None, help="Optional historical news CSV for backtest filtering")
     parser.add_argument("--output-dir", default=None, help="Optional export directory")
+    parser.add_argument("--cache-only", action="store_true", help="Use only local OHLCV cache; do not fetch Yahoo data")
+    parser.add_argument("--refresh-cache", action="store_true", help="Refresh OHLCV cache from Yahoo before running")
+    parser.add_argument("--cache-dir", default=None, help="Override local OHLCV cache directory")
+    parser.add_argument("--trade-cache", action="store_true", help="Use persisted trade cache for identical backtest runs")
+    parser.add_argument("--refresh-trade-cache", action="store_true", help="Ignore persisted trade cache reads and overwrite it after the run")
+    parser.add_argument("--trade-cache-dir", default=None, help="Override persisted trade cache directory")
     parser.add_argument("--validate-shadow", action="store_true", help="Compare shadow scoring disabled vs enabled on the same historical data")
     parser.add_argument("--validate-mitigation-entry", action="store_true", help="Compare market entry vs mitigation limit entry on the same historical data")
     parser.add_argument("--validation-output-dir", default=None, help="Optional export directory for validation results")
@@ -84,19 +109,38 @@ def print_report(result) -> None:
     print(f"Trigger TF: {result.parameters.get('trigger_timeframe')} | LTF: {result.parameters.get('ltf_timeframe')} | HTF: {result.parameters.get('htf_timeframe')}")
     print(
         "Totals: trades={trades} wins={wins} losses={losses} breakeven={breakeven} "
-        "win_rate={win_rate:.1%} avg_r={avg_r:.2f} pf={pf} max_dd={dd:.2f}R".format(
+        "win_rate={win_rate:.1%} avg_r={avg_r:.2f} exp={exp:.2f} avg_win={avg_win:.2f} avg_loss={avg_loss:.2f} pf={pf} max_dd={dd:.2f}R".format(
             trades=overall["trades"],
             wins=overall["wins"],
             losses=overall["losses"],
             breakeven=overall["breakeven"],
             win_rate=overall["win_rate"],
             avg_r=overall["avg_r"],
+            exp=float(overall.get("expectancy_r", overall["avg_r"])),
+            avg_win=float(overall.get("avg_win_r", 0.0)),
+            avg_loss=float(overall.get("avg_loss_r", 0.0)),
             pf=format_number(float(overall["profit_factor"])),
             dd=float(overall["max_drawdown_r"]),
         )
     )
+    if overall.get("accounting_enabled"):
+        currency = str(overall.get("account_currency", "USD"))
+        print(
+            "Account: start={start:.2f} {currency} risk/trade={risk:.2f} {currency} final={final:.2f} {currency} "
+            "net={net:+.2f} {currency} roi={roi:+.2f}% max_dd={dd:.2f} {currency} ({dd_pct:.2f}%) expectancy={exp:+.2f} {currency}/trade".format(
+                start=float(overall.get("starting_balance", 0.0)),
+                risk=float(overall.get("risk_per_trade", 0.0)),
+                final=float(overall.get("final_balance_usd", 0.0)),
+                net=float(overall.get("net_pnl_usd", 0.0)),
+                roi=float(overall.get("roi_pct", 0.0)),
+                dd=float(overall.get("max_drawdown_usd", 0.0)),
+                dd_pct=float(overall.get("max_drawdown_pct", 0.0)),
+                exp=float(overall.get("expectancy_usd", 0.0)),
+                currency=currency,
+            )
+        )
     print(
-        "Quality: avg_score={score:.1f} avg_shadow={shadow:.1f} avg_hold={hold:.1f} bars limit={limit} market={market} fill_delay={delay:.1f} bars partial={partial} be={be} trail={trail} tp_hits={tp} sl_hits={sl} timeout={timeout}".format(
+        "Quality: avg_score={score:.1f} avg_shadow={shadow:.1f} avg_hold={hold:.1f} bars limit={limit} market={market} fill_delay={delay:.1f} bars partial={partial} be={be} trail={trail} atr_trail={atr_trail} liq_trail={liq_trail} adaptive_exit={adaptive} target_rr={target_rr:.2f} sizing={sizing:.2f} meta_p={meta_p:.2f} meta_ok={meta_ok} portfolio_mult={portfolio:.2f} tp_hits={tp} sl_hits={sl} timeout={timeout}".format(
             score=float(overall["avg_score"]),
             shadow=float(overall.get("avg_shadow_bonus", 0.0)),
             hold=float(overall["avg_bars_held"]),
@@ -106,6 +150,14 @@ def print_report(result) -> None:
             partial=overall.get("partial_exits", 0),
             be=overall.get("break_even_activations", 0),
             trail=overall.get("trailing_activations", 0),
+            atr_trail=overall.get("atr_trailing_activations", 0),
+            liq_trail=overall.get("liquidity_trailing_activations", 0),
+            adaptive=overall.get("adaptive_exit_trades", 0),
+            target_rr=float(overall.get("avg_exit_target_rr", 0.0)),
+            sizing=float(overall.get("avg_sizing_multiplier", 1.0)),
+            meta_p=float(overall.get("avg_meta_probability", 1.0)),
+            meta_ok=overall.get("meta_accepted_count", 0),
+            portfolio=float(overall.get("avg_portfolio_multiplier", 1.0)),
             tp=overall["tp_hits"],
             sl=overall["sl_hits"],
             timeout=overall["timeout_exits"],
@@ -123,6 +175,18 @@ def print_report(result) -> None:
             risk_mult=float(overall.get("avg_risk_multiplier", 1.0)),
         )
     )
+    cache_stats = result.parameters.get("snapshot_cache_stats", {}) if hasattr(result, "parameters") else {}
+    if isinstance(cache_stats, dict) and cache_stats:
+        print(
+            "Cache: snapshot_enabled={enabled} entries={entries} hits={hits} misses={misses} stores={stores} skips={skips}".format(
+                enabled=cache_stats.get("enabled", False),
+                entries=cache_stats.get("entries", 0),
+                hits=cache_stats.get("hits", 0),
+                misses=cache_stats.get("misses", 0),
+                stores=cache_stats.get("stores", 0),
+                skips=cache_stats.get("skips", 0),
+            )
+        )
     print()
     print("PAIR BREAKDOWN")
     for row in result.pair_rows():
@@ -132,14 +196,16 @@ def print_report(result) -> None:
         pf = format_number(float(row["profit_factor"]))
         print(
             "{pair}: trades={trades} win_rate={win_rate:.1%} avg_r={avg_r:.2f} pf={pf} max_dd={dd:.2f}R "
-            "shadow={shadow:.1f} limit={limit} market={market} fill_delay={delay:.1f} partial={partial} be={be} trail={trail} "
-            "fill={fill:.1%} spread={spread:.2f} slip={slip:.2f} accept={acc:.1%} rejects={rej}".format(
+            "exp={exp:.2f} payoff={payoff} shadow={shadow:.1f} limit={limit} market={market} fill_delay={delay:.1f} partial={partial} be={be} trail={trail} atr={atr} liq={liq} adaptive={adaptive} target_rr={target_rr:.2f} sizing={sizing:.2f} meta_p={meta_p:.2f} portfolio={portfolio:.2f} "
+            "fill={fill:.1%} spread={spread:.2f} slip={slip:.2f} pnl={pnl:+.2f} final={final:.2f} accept={acc:.1%} rejects={rej}".format(
                 pair=row["pair"],
                 trades=row["trades"],
                 win_rate=row["win_rate"],
                 avg_r=row["avg_r"],
                 pf=pf,
                 dd=float(row["max_drawdown_r"]),
+                exp=float(row.get("expectancy_r", row["avg_r"])),
+                payoff=format_number(float(row.get("payoff_ratio", 0.0))),
                 shadow=float(row.get("avg_shadow_bonus", 0.0)),
                 limit=row.get("limit_entries", 0),
                 market=row.get("market_entries", 0),
@@ -147,9 +213,18 @@ def print_report(result) -> None:
                 partial=row.get("partial_exits", 0),
                 be=row.get("break_even_activations", 0),
                 trail=row.get("trailing_activations", 0),
+                atr=row.get("atr_trailing_activations", 0),
+                liq=row.get("liquidity_trailing_activations", 0),
+                adaptive=row.get("adaptive_exit_trades", 0),
+                target_rr=float(row.get("avg_exit_target_rr", 0.0)),
+                sizing=float(row.get("avg_sizing_multiplier", 1.0)),
+                meta_p=float(row.get("avg_meta_probability", 1.0)),
+                portfolio=float(row.get("avg_portfolio_multiplier", 1.0)),
                 fill=float(row.get("fill_rate", 0.0)),
                 spread=float(row.get("avg_spread_pips", 0.0)),
                 slip=float(row.get("avg_slippage_pips", 0.0)),
+                pnl=float(row.get("net_pnl_usd", 0.0)),
+                final=float(row.get("final_balance_usd", 0.0)),
                 acc=row["acceptance_rate"],
                 rej=row["rejections"],
             )
@@ -172,13 +247,15 @@ def _fmt_delta(value: float | None, *, as_points: bool = False) -> str:
 def _print_validation_line(label: str, metrics: dict[str, object]) -> None:
     print(
             "{label}: trades={trades} win_rate={win_rate:.1%} avg_r={avg_r:.2f} pf={pf} max_dd={dd:.2f}R "
-            "shadow_bonus={shadow:.1f} limit={limit} market={market} fill_delay={delay:.1f} partial={partial} be={be} trail={trail}".format(
+            "exp={exp:.2f} payoff={payoff} shadow_bonus={shadow:.1f} limit={limit} market={market} fill_delay={delay:.1f} partial={partial} be={be} trail={trail}".format(
             label=label,
             trades=metrics["trades"],
             win_rate=metrics["win_rate"],
             avg_r=metrics["avg_r"],
             pf=format_number(float(metrics["profit_factor"])),
             dd=float(metrics["max_drawdown_r"]),
+            exp=float(metrics.get("expectancy_r", metrics["avg_r"])),
+            payoff=format_number(float(metrics.get("payoff_ratio", 0.0))),
             shadow=float(metrics.get("avg_shadow_bonus", 0.0)),
             limit=metrics.get("limit_entries", 0),
             market=metrics.get("market_entries", 0),
@@ -292,12 +369,13 @@ def _print_score_distribution_report(payload: dict[str, object], title: str) -> 
     rejections = payload.get("rejections", {})
     if isinstance(distribution, dict):
         print(
-            "Scores: count={count} mean={mean} median={median} above_threshold={above} acceptance={acc:.1%}".format(
+            "Scores: count={count} mean={mean} median={median} above_threshold={above} acceptance={acc:.1%} scored={coverage:.1%}".format(
                 count=distribution.get("count", 0),
                 mean=distribution.get("mean", 0.0),
                 median=distribution.get("median", 0.0),
                 above=distribution.get("above_threshold_count", 0),
                 acc=float(distribution.get("acceptance_rate", 0.0)),
+                coverage=float(distribution.get("score_coverage_rate", 0.0)),
             )
         )
     if isinstance(rejections, dict):
@@ -315,6 +393,51 @@ def _print_score_distribution_report(payload: dict[str, object], title: str) -> 
                 acc=float(dynamic.get("acceptance_rate_if_applied", 0.0)),
             )
         )
+
+
+def _build_monte_carlo_payload(result, args) -> dict[str, object]:
+    return run_monte_carlo(
+        [trade.r_multiple for trade in result.trades],
+        MonteCarloSettings(
+            iterations=args.mc_iterations,
+            seed=args.mc_seed,
+            ruin_drawdown_r=args.mc_ruin_dd,
+        ),
+    )
+
+
+def _print_monte_carlo_report(payload: dict[str, object], title: str) -> None:
+    print()
+    print(title)
+    if payload.get("error"):
+        print(f"Monte Carlo unavailable: {payload['error']}")
+        return
+
+    terminal = payload.get("terminal_r", {})
+    drawdown = payload.get("max_drawdown_r", {})
+    streak = payload.get("longest_loss_streak", {})
+    if not isinstance(terminal, dict) or not isinstance(drawdown, dict) or not isinstance(streak, dict):
+        return
+
+    print(
+        "Samples={samples} iterations={iters} positive={positive:.1%} risk_of_ruin={ruin:.1%}".format(
+            samples=payload.get("sample_size", 0),
+            iters=payload.get("iterations", 0),
+            positive=float(payload.get("positive_terminal_probability", 0.0)),
+            ruin=float(payload.get("risk_of_ruin_probability", 0.0)),
+        )
+    )
+    print(
+        "Terminal R: median={median:.2f} p05={p05:.2f} p95={p95:.2f} | MaxDD R: median={dd_med:.2f} p95={dd95:.2f} p99={dd99:.2f} | Loss streak p95={ls95:.0f}".format(
+            median=float(terminal.get("median", 0.0)),
+            p05=float(terminal.get("p05", 0.0)),
+            p95=float(terminal.get("p95", 0.0)),
+            dd_med=float(drawdown.get("median", 0.0)),
+            dd95=float(drawdown.get("p95", 0.0)),
+            dd99=float(drawdown.get("p99", 0.0)),
+            ls95=float(streak.get("p95", 0.0)),
+        )
+    )
 
 
 def _print_regime_report(payload: dict[str, object], title: str) -> None:
@@ -337,7 +460,7 @@ def _print_regime_report(payload: dict[str, object], title: str) -> None:
             if not isinstance(row, dict):
                 continue
             print(
-                "{regime}: trades={trades} eval={evals} accepted={accepted} acc={acc} win_rate={wr:.1%} avg_r={avg:.2f} pf={pf}".format(
+                "{regime}: trades={trades} eval={evals} accepted={accepted} acc={acc} win_rate={wr:.1%} avg_r={avg:.2f} exp={exp:.2f} payoff={payoff} pf={pf}".format(
                     regime=regime,
                     trades=row.get("signal_count", 0),
                     evals=row.get("evaluations", 0),
@@ -345,6 +468,10 @@ def _print_regime_report(payload: dict[str, object], title: str) -> None:
                     acc=row.get("acceptance_rate", "n/a"),
                     wr=float(row.get("win_rate", 0.0)),
                     avg=float(row.get("avg_r", 0.0)),
+                    exp=float(row.get("expectancy_r", row.get("avg_r", 0.0))),
+                    payoff=format_number(float(row.get("payoff_ratio", 0.0)))
+                    if row.get("payoff_ratio") is not None
+                    else "inf",
                     pf=format_number(float(row.get("profit_factor", 0.0)))
                     if row.get("profit_factor") is not None
                     else "inf",
@@ -547,6 +674,7 @@ def build_signal_engine(
         enable_shadow_scoring=enable_shadow_scoring,
         enable_mitigation_entry=enable_mitigation_entry,
         enable_adaptive_weights=settings.enable_adaptive_weights,
+        adaptive_weights_preset=settings.adaptive_weights_preset,
         adaptive_regime_weights=settings.adaptive_regime_weights,
         enable_score_normalization=settings.enable_score_normalization,
         score_normalization_method=settings.score_normalization_method,
@@ -561,6 +689,26 @@ def build_signal_engine(
         apply_dynamic_threshold=settings.apply_dynamic_threshold,
         dynamic_threshold_backtest_only=settings.dynamic_threshold_backtest_only,
         allow_live_dynamic_threshold=settings.allow_live_dynamic_threshold,
+        enable_structure_quality_scoring=settings.enable_structure_quality_scoring,
+        structure_quality_scan_bars=settings.smc_structure_scan_bars,
+        structure_quality_min_break_pips=settings.smc_structure_min_break_pips,
+        structure_quality_level_bucket_pips=settings.smc_structure_level_bucket_pips,
+        structure_quality_min_score_for_bonus=settings.structure_quality_min_score_for_bonus,
+        structure_quality_max_bonus=settings.structure_quality_max_bonus,
+        structure_quality_backtest_only=settings.structure_quality_backtest_only,
+        allow_live_structure_quality_scoring=settings.allow_live_structure_quality_scoring,
+        structure_quality_allowed_regimes=settings.structure_quality_allowed_regimes,
+        structure_quality_allowed_pairs=settings.structure_quality_allowed_pairs,
+        structure_quality_excluded_pairs=settings.structure_quality_excluded_pairs,
+        live_exit_profile_enabled=settings.enable_exit_engine,
+        live_exit_profile_preset=settings.exit_profile_preset,
+        live_exit_use_regime_profiles=settings.exit_use_regime_profiles,
+        live_exit_volatility_rr_enabled=settings.exit_volatility_rr_enabled,
+        live_exit_volatility_rr_floor=settings.exit_volatility_rr_floor,
+        live_exit_volatility_rr_cap=settings.exit_volatility_rr_cap,
+        live_exit_liquidity_trailing_enabled=settings.exit_liquidity_trailing_enabled,
+        live_exit_liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
+        live_exit_liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
     )
 
 
@@ -598,6 +746,172 @@ def build_equity_protection_settings(settings: Settings) -> EquityProtectionSett
     )
 
 
+def build_exit_settings(settings: Settings) -> AdaptiveExitSettings:
+    return AdaptiveExitSettings(
+        enabled=settings.enable_exit_engine,
+        profile_preset=settings.exit_profile_preset,
+        use_regime_profiles=settings.exit_use_regime_profiles,
+        profile_overrides=settings.exit_profile_overrides,
+        atr_trailing_enabled=settings.exit_atr_trailing_enabled,
+        atr_trailing_period=settings.exit_atr_trailing_period,
+        atr_trailing_multiplier=settings.exit_atr_trailing_multiplier,
+        liquidity_trailing_enabled=settings.exit_liquidity_trailing_enabled,
+        liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
+        liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
+        volatility_rr_enabled=settings.exit_volatility_rr_enabled,
+        volatility_rr_floor=settings.exit_volatility_rr_floor,
+        volatility_rr_cap=settings.exit_volatility_rr_cap,
+    )
+
+
+def build_sizing_settings(settings: Settings) -> AdaptiveSizingSettings:
+    return AdaptiveSizingSettings(
+        enabled=settings.enable_adaptive_sizing,
+        min_multiplier=settings.sizing_min_multiplier,
+        max_multiplier=settings.sizing_max_multiplier,
+        confidence_floor_score=settings.sizing_confidence_floor_score,
+        confidence_ceiling_score=settings.sizing_confidence_ceiling_score,
+    )
+
+
+def build_meta_label_settings(settings: Settings) -> MetaLabelSettings:
+    return MetaLabelSettings(
+        enabled=settings.enable_meta_label,
+        mode=settings.meta_label_mode,
+        probability_threshold=settings.meta_label_probability_threshold,
+        enable_size_adjustment=settings.meta_label_enable_size_adjustment,
+        low_probability_multiplier=settings.meta_label_low_probability_multiplier,
+        high_probability_multiplier=settings.meta_label_high_probability_multiplier,
+        high_probability_threshold=settings.meta_label_high_probability_threshold,
+    )
+
+
+def build_portfolio_layer_settings(settings: Settings) -> PortfolioLayerSettings:
+    return PortfolioLayerSettings(
+        enabled=settings.enable_portfolio_layer,
+        mode=settings.portfolio_layer_mode,
+        min_multiplier=settings.portfolio_layer_min_multiplier,
+        max_multiplier=settings.portfolio_layer_max_multiplier,
+        learning_window=settings.portfolio_layer_learning_window,
+        min_trades_per_sleeve=settings.portfolio_layer_min_trades_per_sleeve,
+        max_sleeve_concentration=settings.portfolio_layer_max_sleeve_concentration,
+    )
+
+
+def build_snapshot_cache_settings(settings: Settings) -> SnapshotCacheSettings:
+    return SnapshotCacheSettings(
+        enabled=settings.enable_backtest_snapshot_cache,
+        max_entries=settings.backtest_snapshot_cache_max_entries,
+    )
+
+
+def build_trade_cache_settings(settings: Settings, args: argparse.Namespace | None = None) -> TradeCacheSettings:
+    enabled = settings.enable_backtest_trade_cache
+    cache_dir = settings.backtest_trade_cache_dir
+    if args is not None:
+        enabled = enabled or bool(getattr(args, "trade_cache", False))
+        if getattr(args, "trade_cache_dir", None):
+            cache_dir = str(args.trade_cache_dir)
+    return TradeCacheSettings(
+        enabled=enabled,
+        cache_dir=cache_dir,
+        version=settings.backtest_trade_cache_version,
+    ).sanitized()
+
+
+def resolve_backtest_end_time(settings: Settings, args: argparse.Namespace | None = None) -> str | None:
+    raw = str(getattr(args, "end_time", "") or settings.backtest_end_time or "").strip()
+    return raw or None
+
+
+def _safe_settings_payload(settings: Settings) -> dict[str, object]:
+    payload = asdict(settings)
+    for key in (
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "mt5_password",
+        "backtest_trade_cache_dir",
+        "enable_backtest_trade_cache",
+    ):
+        payload.pop(key, None)
+    return payload
+
+
+def build_trade_cache_key_payload(
+    *,
+    settings: Settings,
+    args: argparse.Namespace,
+    pairs: list[str],
+    ltf: str,
+    htf: str,
+    trigger: str,
+    evaluation_step: int,
+    cache_mode: str,
+    account_settings: BacktestAccountSettings,
+    end_time: str | None,
+) -> dict[str, object]:
+    return {
+        "runner": "backtest_runner",
+        "pairs": pairs,
+        "timeframes": {"ltf": ltf, "htf": htf, "trigger": trigger},
+        "history_limit": int(args.history_limit),
+        "max_hold_bars": int(args.max_hold_bars),
+        "warmup_bars": int(args.warmup_bars),
+        "evaluation_step": int(evaluation_step),
+        "end_time": end_time,
+        "cache_mode": cache_mode,
+        "news_csv": args.news_csv or None,
+        "account": asdict(account_settings),
+        "settings": _safe_settings_payload(settings),
+        "execution_settings": asdict(build_execution_settings(settings)),
+        "atr_risk_settings": asdict(build_atr_risk_settings(settings)),
+        "equity_protection_settings": asdict(build_equity_protection_settings(settings)),
+        "exit_settings": asdict(build_exit_settings(settings).sanitized()),
+        "sizing_settings": asdict(build_sizing_settings(settings)),
+        "meta_label_settings": asdict(build_meta_label_settings(settings)),
+        "portfolio_layer_settings": asdict(build_portfolio_layer_settings(settings)),
+        "smc_research_feature_settings": asdict(build_smc_research_feature_settings(settings)),
+    }
+
+
+def build_smc_research_feature_settings(settings: Settings) -> SMCResearchFeatureSettings:
+    return SMCResearchFeatureSettings(
+        enabled=settings.enable_smc_research_features,
+        structure_scan_bars=settings.smc_structure_scan_bars,
+        structure_min_break_pips=settings.smc_structure_min_break_pips,
+        structure_level_bucket_pips=settings.smc_structure_level_bucket_pips,
+        ob_lookback_bars=settings.smc_ob_lookback_bars,
+        ob_max_age_bars=settings.smc_ob_max_age_bars,
+        ob_max_width_pips=settings.smc_ob_max_width_pips,
+        ob_max_distance_pips=settings.smc_ob_max_distance_pips,
+        relaxed_fvg_lookback_bars=settings.smc_relaxed_fvg_lookback_bars,
+        relaxed_fvg_min_gap_pips=settings.smc_relaxed_fvg_min_gap_pips,
+        relaxed_fvg_max_distance_pips=settings.smc_relaxed_fvg_max_distance_pips,
+    )
+
+
+def build_account_settings(settings: Settings, args: argparse.Namespace | None = None) -> BacktestAccountSettings:
+    enabled = settings.backtest_account_enabled
+    starting_balance = settings.backtest_starting_balance
+    risk_per_trade = settings.backtest_risk_per_trade
+    currency = settings.backtest_account_currency
+    if args is not None:
+        if getattr(args, "disable_account_report", False):
+            enabled = False
+        if getattr(args, "account_balance", None) is not None:
+            starting_balance = float(args.account_balance)
+        if getattr(args, "risk_per_trade", None) is not None:
+            risk_per_trade = float(args.risk_per_trade)
+        if getattr(args, "account_currency", None):
+            currency = str(args.account_currency)
+    return BacktestAccountSettings(
+        enabled=enabled,
+        starting_balance=starting_balance,
+        risk_per_trade=risk_per_trade,
+        currency=currency,
+    ).sanitized()
+
+
 def main() -> None:
     _configure_logging()
     settings = Settings.from_env()
@@ -608,8 +922,30 @@ def main() -> None:
     ltf = args.ltf or settings.ltf_timeframe
     htf = args.htf or settings.htf_timeframe
     trigger = args.trigger or settings.trigger_timeframe
+    evaluation_step = max(1, args.evaluation_step or settings.backtest_evaluation_step)
+    account_settings = build_account_settings(settings, args)
+    backtest_end_time = resolve_backtest_end_time(settings, args)
+    trade_cache = BacktestTradeCache(build_trade_cache_settings(settings, args))
     score_analysis_requested = args.analyze_scores or args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
     dynamic_threshold_analysis_enabled = args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
+    cache_mode = settings.market_data_cache_mode
+    if args.cache_only:
+        cache_mode = "cache_only"
+    elif args.refresh_cache:
+        cache_mode = "refresh"
+    trade_cache_key_payload = build_trade_cache_key_payload(
+        settings=settings,
+        args=args,
+        pairs=pairs,
+        ltf=ltf,
+        htf=htf,
+        trigger=trigger,
+        evaluation_step=evaluation_step,
+        cache_mode=cache_mode,
+        account_settings=account_settings,
+        end_time=backtest_end_time,
+    )
+    trade_cache_key = trade_cache.build_key(trade_cache_key_payload)
 
     market_data = MarketDataClient(
         history_limit=max(settings.history_limit, args.history_limit),
@@ -617,6 +953,13 @@ def main() -> None:
         mt5_login=settings.mt5_login,
         mt5_password=settings.mt5_password,
         mt5_server=settings.mt5_server,
+        mt5_path=settings.mt5_path,
+        cache_config=MarketDataCacheConfig(
+            enabled=settings.market_data_cache_enabled,
+            cache_dir=args.cache_dir or settings.market_data_cache_dir,
+            ttl_hours=settings.market_data_cache_ttl_hours,
+            mode=cache_mode,
+        ),
     )
     live_news = NewsFilter(
         blackout_before_minutes=settings.news_blackout_before_minutes,
@@ -655,10 +998,19 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
         wf_runner = WalkForwardRunner(
             engine=engine,
@@ -717,10 +1069,19 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
         shadow_engine = BacktestEngine(
             market_data=market_data,
@@ -737,10 +1098,19 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
 
         validator = BacktestValidationRunner(baseline_engine, shadow_engine)
@@ -781,6 +1151,17 @@ def main() -> None:
             reports_dir = Path("reports")
             exported_regime = export_regime_report(regime_payload, reports_dir / "regime_report.json")
             print(f"\nExported regime report to: {exported_regime.resolve()}")
+
+        if args.monte_carlo:
+            mc_payload = {
+                "baseline": _build_monte_carlo_payload(result.baseline, args),
+                "shadow": _build_monte_carlo_payload(result.shadow, args),
+            }
+            _print_monte_carlo_report(mc_payload["baseline"], "BASELINE MONTE CARLO")
+            _print_monte_carlo_report(mc_payload["shadow"], "SHADOW MONTE CARLO")
+            if settings.export_reports and not args.no_export:
+                reports_dir = Path("reports")
+                _write_json_report(reports_dir / "monte_carlo.json", mc_payload)
 
         if not args.no_export:
             export_dir = (
@@ -806,10 +1187,19 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
         shadow_engine = BacktestEngine(
             market_data=market_data,
@@ -826,10 +1216,19 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
 
         validator = BacktestValidationRunner(baseline_engine, shadow_engine)
@@ -870,6 +1269,17 @@ def main() -> None:
             reports_dir = Path("reports")
             exported_regime = export_regime_report(regime_payload, reports_dir / "regime_report.json")
             print(f"\nExported regime report to: {exported_regime.resolve()}")
+
+        if args.monte_carlo:
+            mc_payload = {
+                "baseline": _build_monte_carlo_payload(result.baseline, args),
+                "shadow": _build_monte_carlo_payload(result.shadow, args),
+            }
+            _print_monte_carlo_report(mc_payload["baseline"], "BASELINE MONTE CARLO")
+            _print_monte_carlo_report(mc_payload["shadow"], "SHADOW MONTE CARLO")
+            if settings.export_reports and not args.no_export:
+                reports_dir = Path("reports")
+                _write_json_report(reports_dir / "monte_carlo.json", mc_payload)
 
         if not args.no_export:
             export_dir = (
@@ -897,13 +1307,39 @@ def main() -> None:
             history_limit=args.history_limit,
             max_hold_bars=args.max_hold_bars,
             warmup_bars=args.warmup_bars,
+            evaluation_step=evaluation_step,
             news_feed=news_feed,
             execution_settings=build_execution_settings(settings),
             atr_risk_settings=build_atr_risk_settings(settings),
             equity_protection_settings=build_equity_protection_settings(settings),
+            exit_settings=build_exit_settings(settings),
+            sizing_settings=build_sizing_settings(settings),
+            meta_label_settings=build_meta_label_settings(settings),
+            portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            snapshot_cache_settings=build_snapshot_cache_settings(settings),
+            smc_research_feature_settings=build_smc_research_feature_settings(settings),
+            account_settings=account_settings,
+            end_time=backtest_end_time,
         )
 
-        result = engine.run(pairs)
+        result = None
+        if trade_cache.enabled and not args.refresh_trade_cache:
+            result = trade_cache.load(trade_cache_key)
+            if result is not None:
+                print(f"Trade cache: HIT {result.parameters.get('trade_cache_path')}")
+
+        if result is None:
+            result = engine.run(pairs)
+            if trade_cache.enabled:
+                path = trade_cache.store(
+                    trade_cache_key,
+                    trade_cache_key_payload,
+                    result,
+                    metadata={"runner": "backtest_runner"},
+                )
+                if path is not None:
+                    print(f"Trade cache: STORED {path}")
+
         print_report(result)
 
         realism_active = (
@@ -928,10 +1364,19 @@ def main() -> None:
                 history_limit=args.history_limit,
                 max_hold_bars=args.max_hold_bars,
                 warmup_bars=args.warmup_bars,
+                evaluation_step=evaluation_step,
                 news_feed=news_feed,
                 execution_settings=RealisticExecutionSettings(enabled=False),
                 atr_risk_settings=ATRRiskSettings(enabled=False),
                 equity_protection_settings=EquityProtectionSettings(enabled=False),
+                exit_settings=build_exit_settings(settings),
+                sizing_settings=build_sizing_settings(settings),
+                meta_label_settings=build_meta_label_settings(settings),
+                portfolio_layer_settings=build_portfolio_layer_settings(settings),
+                snapshot_cache_settings=build_snapshot_cache_settings(settings),
+                smc_research_feature_settings=build_smc_research_feature_settings(settings),
+                account_settings=account_settings,
+                end_time=backtest_end_time,
             )
             baseline_result = baseline_engine.run(pairs)
             comparison_payload = print_realistic_comparison(baseline_result, result)
@@ -964,6 +1409,13 @@ def main() -> None:
             reports_dir = Path("reports")
             exported_regime = export_regime_report(regime_payload, reports_dir / "regime_report.json")
             print(f"\nExported regime report to: {exported_regime.resolve()}")
+
+        if args.monte_carlo:
+            mc_payload = _build_monte_carlo_payload(result, args)
+            _print_monte_carlo_report(mc_payload, "MONTE CARLO")
+            if settings.export_reports and not args.no_export:
+                reports_dir = Path("reports")
+                _write_json_report(reports_dir / "monte_carlo.json", mc_payload)
 
         if comparison_payload is not None and settings.export_reports and not args.no_export:
             reports_dir = Path("reports")

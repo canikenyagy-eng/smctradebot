@@ -6,9 +6,12 @@ import time
 
 from config import Settings
 from core.signal_engine import SignalEngine
-from data.market_data import MarketDataClient
+from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
 from services.telegram import TelegramSignalService
+
+
+LIVE_PROFILE_PAIRS = ("EURUSD", "USDJPY")
 
 
 def configure_logging() -> None:
@@ -20,6 +23,9 @@ def configure_logging() -> None:
 
 async def run_engine() -> None:
     settings = Settings.from_env()
+    live_pairs = list(settings.pairs)
+    if settings.enable_exit_engine and settings.exit_profile_preset == "m15_vol_liq_v1":
+        live_pairs = list(LIVE_PROFILE_PAIRS)
 
     market_data = MarketDataClient(
         history_limit=settings.history_limit,
@@ -27,6 +33,13 @@ async def run_engine() -> None:
         mt5_login=settings.mt5_login,
         mt5_password=settings.mt5_password,
         mt5_server=settings.mt5_server,
+        mt5_path=settings.mt5_path,
+        cache_config=MarketDataCacheConfig(
+            enabled=settings.market_data_cache_enabled,
+            cache_dir=settings.market_data_cache_dir,
+            ttl_hours=settings.market_data_cache_ttl_hours,
+            mode=settings.market_data_cache_mode,
+        ),
     )
     news_filter = NewsFilter(
         blackout_before_minutes=settings.news_blackout_before_minutes,
@@ -73,6 +86,7 @@ async def run_engine() -> None:
         regime_long_window=settings.regime_long_window,
         enable_mitigation_entry=settings.enable_mitigation_entry,
         enable_adaptive_weights=settings.enable_adaptive_weights,
+        adaptive_weights_preset=settings.adaptive_weights_preset,
         adaptive_regime_weights=settings.adaptive_regime_weights,
         enable_score_normalization=settings.enable_score_normalization,
         score_normalization_method=settings.score_normalization_method,
@@ -87,6 +101,26 @@ async def run_engine() -> None:
         apply_dynamic_threshold=settings.apply_dynamic_threshold,
         dynamic_threshold_backtest_only=settings.dynamic_threshold_backtest_only,
         allow_live_dynamic_threshold=settings.allow_live_dynamic_threshold,
+        enable_structure_quality_scoring=settings.enable_structure_quality_scoring,
+        structure_quality_scan_bars=settings.smc_structure_scan_bars,
+        structure_quality_min_break_pips=settings.smc_structure_min_break_pips,
+        structure_quality_level_bucket_pips=settings.smc_structure_level_bucket_pips,
+        structure_quality_min_score_for_bonus=settings.structure_quality_min_score_for_bonus,
+        structure_quality_max_bonus=settings.structure_quality_max_bonus,
+        structure_quality_backtest_only=settings.structure_quality_backtest_only,
+        allow_live_structure_quality_scoring=settings.allow_live_structure_quality_scoring,
+        structure_quality_allowed_regimes=settings.structure_quality_allowed_regimes,
+        structure_quality_allowed_pairs=settings.structure_quality_allowed_pairs,
+        structure_quality_excluded_pairs=settings.structure_quality_excluded_pairs,
+        live_exit_profile_enabled=settings.enable_exit_engine,
+        live_exit_profile_preset=settings.exit_profile_preset,
+        live_exit_use_regime_profiles=settings.exit_use_regime_profiles,
+        live_exit_volatility_rr_enabled=settings.exit_volatility_rr_enabled,
+        live_exit_volatility_rr_floor=settings.exit_volatility_rr_floor,
+        live_exit_volatility_rr_cap=settings.exit_volatility_rr_cap,
+        live_exit_liquidity_trailing_enabled=settings.exit_liquidity_trailing_enabled,
+        live_exit_liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
+        live_exit_liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
     )
     telegram = TelegramSignalService(
         token=settings.telegram_bot_token,
@@ -94,12 +128,21 @@ async def run_engine() -> None:
     )
 
     logger = logging.getLogger("engine")
-    logger.info("Started signal engine for pairs: %s", ", ".join(settings.pairs))
+    logger.info(
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s",
+        ", ".join(live_pairs),
+        settings.exit_profile_preset,
+        settings.enable_exit_engine,
+        settings.exit_volatility_rr_enabled,
+        settings.exit_volatility_rr_floor,
+        settings.exit_volatility_rr_cap,
+        settings.exit_liquidity_trailing_enabled,
+    )
 
     try:
         while True:
             cycle_started = time.monotonic()
-            signals = await asyncio.to_thread(engine.scan_pairs, settings.pairs)
+            signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
 
             sent_count = 0
             for signal in signals:
@@ -111,7 +154,7 @@ async def run_engine() -> None:
                 "Scan completed | found=%s sent=%s pairs=%s",
                 len(signals),
                 sent_count,
-                len(settings.pairs),
+                len(live_pairs),
             )
 
             elapsed = time.monotonic() - cycle_started

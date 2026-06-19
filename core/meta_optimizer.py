@@ -58,8 +58,8 @@ class FoldOptimizationResult:
     best_weights: dict[str, float] | None = None
     
     # Metrics at best params
-    train_metrics: dict[str, Any]
-    test_metrics: dict[str, Any] | None
+    train_metrics: dict[str, Any] = field(default_factory=dict)
+    test_metrics: dict[str, Any] | None = None
     
     # Stability
     stability_score: float = 0.0
@@ -87,9 +87,9 @@ class MetaOptimizationResult:
     recommended_weights: dict[str, float] | None = None
     
     # Configuration snapshot
-    config: dict[str, Any]
-    started_at: datetime
-    finished_at: datetime
+    config: dict[str, Any] = field(default_factory=dict)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> dict[str, Any]:
         return {

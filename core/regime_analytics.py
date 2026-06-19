@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean
+from statistics import mean, pstdev
 import json
 
 
@@ -19,6 +19,31 @@ def _profit_factor(values: list[float]) -> float:
     if gross_loss <= 0:
         return float("inf") if gross_profit > 0 else 0.0
     return gross_profit / gross_loss
+
+
+def _expectancy(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {
+            "avg_win_r": 0.0,
+            "avg_loss_r": 0.0,
+            "payoff_ratio": 0.0,
+            "expectancy_r": 0.0,
+            "sharpe_r": 0.0,
+        }
+    wins = [item for item in values if item > 0]
+    losses = [abs(item) for item in values if item < 0]
+    avg_win = mean(wins) if wins else 0.0
+    avg_loss = mean(losses) if losses else 0.0
+    win_rate = len(wins) / len(values)
+    payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
+    volatility = pstdev(values) if len(values) > 1 else 0.0
+    return {
+        "avg_win_r": avg_win,
+        "avg_loss_r": avg_loss,
+        "payoff_ratio": payoff_ratio,
+        "expectancy_r": (win_rate * avg_win) - ((1.0 - win_rate) * avg_loss),
+        "sharpe_r": (mean(values) / volatility) if volatility > 0 else 0.0,
+    }
 
 
 def analyze_regime_performance(
@@ -44,6 +69,7 @@ def analyze_regime_performance(
         win_rate = (wins / trades_count) if trades_count else 0.0
         avg_r = mean(pnl) if pnl else 0.0
         pf = _profit_factor(pnl)
+        expectancy = _expectancy(pnl)
         evaluations = int(eval_counts.get(regime, 0))
         accepted = int(acceptance_counts.get(regime, trades_count))
         acceptance_rate = (accepted / evaluations) if evaluations > 0 else None
@@ -56,6 +82,11 @@ def analyze_regime_performance(
             "win_rate": round(float(win_rate), 6),
             "profit_factor": None if pf == float("inf") else round(float(pf), 6),
             "avg_r": round(float(avg_r), 6),
+            "avg_win_r": round(float(expectancy["avg_win_r"]), 6),
+            "avg_loss_r": round(float(expectancy["avg_loss_r"]), 6),
+            "payoff_ratio": None if expectancy["payoff_ratio"] == float("inf") else round(float(expectancy["payoff_ratio"]), 6),
+            "expectancy_r": round(float(expectancy["expectancy_r"]), 6),
+            "sharpe_r": round(float(expectancy["sharpe_r"]), 6),
         }
 
     total_evaluations = int(sum(eval_counts.values()))
@@ -94,4 +125,3 @@ def export_regime_report(payload: Mapping[str, object], path: str | Path) -> Pat
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
     return target
-

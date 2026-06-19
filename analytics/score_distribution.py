@@ -20,6 +20,7 @@ def analyze_scores(
     *,
     threshold: int = 70,
     total_evaluations: int | None = None,
+    accepted_count: int | None = None,
     bucket_size: int = 5,
 ) -> dict[str, Any]:
     values = [score for item in signals if (score := _score_value(item)) is not None]
@@ -36,7 +37,11 @@ def analyze_scores(
 
     above_threshold = sum(1 for score in values if score >= threshold)
     count = len(values)
-    acceptance_rate = (count / total_evaluations) if total_evaluations else (1.0 if count > 0 else 0.0)
+    score_coverage_rate = (count / total_evaluations) if total_evaluations else (1.0 if count > 0 else 0.0)
+    if accepted_count is not None and total_evaluations:
+        acceptance_rate = accepted_count / total_evaluations
+    else:
+        acceptance_rate = score_coverage_rate
 
     return {
         "count": count,
@@ -45,7 +50,9 @@ def analyze_scores(
         "threshold": threshold,
         "above_threshold_count": above_threshold,
         "above_threshold_pct": round((above_threshold / count) if count else 0.0, 6),
+        "accepted_count": int(accepted_count) if accepted_count is not None else None,
         "acceptance_rate": round(acceptance_rate, 6),
+        "score_coverage_rate": round(score_coverage_rate, 6),
         "histogram": {key: bucket_counter[key] for key in sorted(bucket_counter)},
     }
 

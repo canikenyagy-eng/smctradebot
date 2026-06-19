@@ -12,6 +12,13 @@ from utils.dedup import SignalDeduplicator
 
 
 def _format_signal(signal: TradeSignal) -> str:
+    profile = signal.meta.get("live_profile") if isinstance(signal.meta, dict) else None
+    profile_line = ""
+    if isinstance(profile, dict) and profile.get("enabled"):
+        profile_line = (
+            f"🧬 <b>Profile:</b> {profile.get('preset')} / {profile.get('regime_profile')} "
+            f"| RR {profile.get('target_rr')} | LiqTrail {'ON' if profile.get('liquidity_trailing_enabled') else 'OFF'}\n"
+        )
     return (
         f"🚀 <b>SMC AI SIGNAL ({signal.symbol})</b>\n\n"
         f"📊 <b>Type:</b> {signal.side}\n"
@@ -20,6 +27,7 @@ def _format_signal(signal: TradeSignal) -> str:
         f"🎯 <b>TP:</b> {signal.take_profit}\n"
         f"🧭 <b>Mode:</b> {signal.entry_mode} | {signal.entry_source}\n"
         f"📝 <b>Plan:</b> {signal.entry_summary}\n\n"
+        f"{profile_line}"
         f"🛠 <b>Mgmt:</b> {signal.management_summary}\n"
         f"🧷 <b>Partial:</b> {signal.partial_take_profit if signal.partial_take_profit is not None else 'OFF'} | {int(signal.partial_take_fraction * 100)}%\n"
         f"♻️ <b>Break-even:</b> {signal.break_even_r}R | <b>Trail:</b> {'ON' if signal.trailing_enabled else 'OFF'} @{signal.trailing_start_r}R\n"

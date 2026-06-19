@@ -159,6 +159,7 @@ def apply_regime_weights_to_breakdown(
         smt_alignment=breakdown.smt_alignment,
         shadow_bonus=breakdown.shadow_bonus,
         total=new_total,
+        structure_quality=breakdown.structure_quality,
     )
 
 
@@ -177,6 +178,7 @@ class ScoreBreakdown:
     smt_alignment: int
     shadow_bonus: int
     total: int
+    structure_quality: int = 0
 
     def contribution_dict(self) -> dict[str, int]:
         return {
@@ -191,6 +193,7 @@ class ScoreBreakdown:
             "shadow_ob": int(self.order_block_alignment),
             "shadow_mitigation": int(self.mitigation_alignment),
             "shadow_smt": int(self.smt_alignment),
+            "structure_quality": int(self.structure_quality),
         }
 
 
@@ -361,6 +364,7 @@ def calculate_score(
     signal_time: datetime,
     shadow: ShadowFeatureContext | None = None,
     adaptive_weights: AdaptiveWeightSettings | None = None,
+    structure_quality_bonus: int = 0,
 ) -> ScoreBreakdown:
     breakdown, _ = calculate_score_details(
         pair=pair,
@@ -374,6 +378,7 @@ def calculate_score(
         signal_time=signal_time,
         shadow=shadow,
         adaptive_weights=adaptive_weights,
+        structure_quality_bonus=structure_quality_bonus,
     )
     return breakdown
 
@@ -390,6 +395,7 @@ def calculate_score_details(
     signal_time: datetime,
     shadow: ShadowFeatureContext | None = None,
     adaptive_weights: AdaptiveWeightSettings | None = None,
+    structure_quality_bonus: int = 0,
 ) -> tuple[ScoreBreakdown, dict[str, object]]:
     htf = _score_htf_alignment(side, htf_bias)
     regime_score = _score_regime_alignment(side, regime)
@@ -409,6 +415,7 @@ def calculate_score_details(
         )
     else:
         shadow_scores = score_shadow_context(shadow)
+    structure_quality = max(0, min(20, int(structure_quality_bonus)))
 
     raw_total = max(
         0,
@@ -421,7 +428,8 @@ def calculate_score_details(
             + zone_score
             + news_score
             + session
-            + shadow_scores.total,
+            + shadow_scores.total
+            + structure_quality,
         ),
     )
     raw_components = {
@@ -436,12 +444,16 @@ def calculate_score_details(
         "shadow_ob": int(shadow_scores.order_block_alignment),
         "shadow_mitigation": int(shadow_scores.mitigation_alignment),
         "shadow_smt": int(shadow_scores.smt_alignment),
+        "structure_quality": int(structure_quality),
     }
     weighted_components, weighted_total, adaptive_meta = apply_regime_weights(
         raw_components,
         regime_label=regime.label,
         settings=adaptive_weights,
     )
+    weighted_components = dict(weighted_components)
+    weighted_components["structure_quality"] = int(structure_quality)
+    weighted_total = max(0, min(100, int(weighted_total) + structure_quality))
 
     if adaptive_meta.get("enabled", False):
         score = ScoreBreakdown(
@@ -463,6 +475,7 @@ def calculate_score_details(
                 + weighted_components["shadow_smt"]
             ),
             total=weighted_total,
+            structure_quality=structure_quality,
         )
     else:
         score = ScoreBreakdown(
@@ -479,7 +492,16 @@ def calculate_score_details(
             smt_alignment=shadow_scores.smt_alignment,
             shadow_bonus=shadow_scores.total,
             total=raw_total,
+            structure_quality=structure_quality,
         )
+
+    return score, {
+        "raw_components": raw_components,
+        "weighted_components": weighted_components,
+        "adaptive_weights": adaptive_meta,
+        "raw_total": raw_total,
+        "weighted_total": weighted_total,
+    }
 
 
 def calculate_score_regime_aware(

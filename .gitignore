@@ -3,3 +3,6 @@
 __pycache__/
 .DS_Store
 backtests/
+data/cache/
+logs/*.log
+reports/

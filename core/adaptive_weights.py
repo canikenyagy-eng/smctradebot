@@ -34,6 +34,7 @@ LEGACY_FEATURE_MAX = {
     "shadow_mitigation": 6.0,
     "shadow_smt": 8.0,
 }
+LEGACY_SCORE_CAPACITY = sum(LEGACY_FEATURE_MAX.values())
 
 DEFAULT_ADAPTIVE_WEIGHTS: dict[str, dict[str, float]] = {
     "trend": {
@@ -103,11 +104,85 @@ DEFAULT_ADAPTIVE_WEIGHTS: dict[str, dict[str, float]] = {
     },
 }
 
+EFFECTIVENESS_V1_WEIGHTS: dict[str, dict[str, float]] = {
+    "trend": {
+        "htf": 26.0,
+        "regime": 3.0,
+        "trigger": 12.0,
+        "liquidity": 22.0,
+        "pd": 2.0,
+        "session": 16.0,
+        "news": 5.0,
+        "shadow_fvg": 24.0,
+        "shadow_ob": 10.0,
+        "shadow_mitigation": 0.0,
+        "shadow_smt": 0.0,
+    },
+    "range": {
+        "htf": 20.0,
+        "regime": 2.0,
+        "trigger": 10.0,
+        "liquidity": 28.0,
+        "pd": 2.0,
+        "session": 18.0,
+        "news": 5.0,
+        "shadow_fvg": 24.0,
+        "shadow_ob": 12.0,
+        "shadow_mitigation": 0.0,
+        "shadow_smt": 0.0,
+    },
+    "expansion": {
+        "htf": 24.0,
+        "regime": 2.0,
+        "trigger": 12.0,
+        "liquidity": 28.0,
+        "pd": 1.0,
+        "session": 14.0,
+        "news": 5.0,
+        "shadow_fvg": 24.0,
+        "shadow_ob": 8.0,
+        "shadow_mitigation": 0.0,
+        "shadow_smt": 0.0,
+    },
+    "contraction": {
+        "htf": 20.0,
+        "regime": 2.0,
+        "trigger": 8.0,
+        "liquidity": 24.0,
+        "pd": 1.0,
+        "session": 20.0,
+        "news": 5.0,
+        "shadow_fvg": 26.0,
+        "shadow_ob": 14.0,
+        "shadow_mitigation": 0.0,
+        "shadow_smt": 0.0,
+    },
+    "neutral": {
+        "htf": 22.0,
+        "regime": 2.0,
+        "trigger": 10.0,
+        "liquidity": 24.0,
+        "pd": 1.0,
+        "session": 18.0,
+        "news": 5.0,
+        "shadow_fvg": 24.0,
+        "shadow_ob": 12.0,
+        "shadow_mitigation": 0.0,
+        "shadow_smt": 0.0,
+    },
+}
+
+WEIGHT_PRESETS: dict[str, dict[str, dict[str, float]]] = {
+    "default": DEFAULT_ADAPTIVE_WEIGHTS,
+    "effectiveness_v1": EFFECTIVENESS_V1_WEIGHTS,
+}
+
 
 @dataclass(frozen=True)
 class AdaptiveWeightSettings:
     enabled: bool = False
     regime_weights: dict[str, dict[str, float]] | None = None
+    preset: str = "default"
 
 
 @dataclass(frozen=True)
@@ -130,11 +205,21 @@ class DynamicThresholdSettings:
     allow_live: bool = False
 
 
-def _sanitize_regime_map(weights: Mapping[str, Mapping[str, float]] | None) -> dict[str, dict[str, float]]:
+def _base_regime_weights(preset: str | None) -> dict[str, dict[str, float]]:
+    key = (preset or "default").strip().lower()
+    return WEIGHT_PRESETS.get(key, DEFAULT_ADAPTIVE_WEIGHTS)
+
+
+def _sanitize_regime_map(
+    weights: Mapping[str, Mapping[str, float]] | None,
+    *,
+    preset: str | None = None,
+) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
+    base_preset = _base_regime_weights(preset)
     source = weights or {}
     for regime in ("trend", "range", "expansion", "contraction", "neutral"):
-        base = dict(DEFAULT_ADAPTIVE_WEIGHTS[regime])
+        base = dict(base_preset[regime])
         override = source.get(regime, {})
         for key in FEATURE_KEYS:
             value = override.get(key, base[key])
@@ -145,9 +230,9 @@ def _sanitize_regime_map(weights: Mapping[str, Mapping[str, float]] | None) -> d
             base[key] = max(0.0, parsed)
         total = sum(base.values())
         if total <= 0:
-            base = dict(DEFAULT_ADAPTIVE_WEIGHTS[regime])
+            base = dict(base_preset[regime])
             total = sum(base.values())
-        scale = 100.0 / total
+        scale = LEGACY_SCORE_CAPACITY / total
         merged[regime] = {key: round(base[key] * scale, 6) for key in FEATURE_KEYS}
     return merged
 
@@ -159,7 +244,7 @@ def resolve_regime_weights(
     if settings is None or not settings.enabled:
         return "legacy_fixed", {}
 
-    weights = _sanitize_regime_map(settings.regime_weights)
+    weights = _sanitize_regime_map(settings.regime_weights, preset=settings.preset)
     label = regime_label.lower().strip()
     if label not in weights:
         label = "neutral"
@@ -195,6 +280,7 @@ def apply_regime_weights(
     return weighted, total, {
         "enabled": True,
         "profile": profile_name,
+        "preset": settings.preset if settings is not None else "default",
         "weights": {key: round(float(weights[key]), 6) for key in FEATURE_KEYS},
         "raw_total": raw_total,
         "weighted_total": total,
@@ -312,4 +398,3 @@ class DynamicThresholdTracker:
             return
         clamped = max(0.0, min(100.0, float(score)))
         self._history.append(clamped)
-
