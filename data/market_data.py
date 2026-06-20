@@ -66,6 +66,7 @@ class MarketDataClient:
         mt5_password: str = "",
         mt5_server: str = "",
         mt5_path: str = "",
+        itick_config: dict[str, object] | None = None,
         cache_config: MarketDataCacheConfig | None = None,
     ) -> None:
         self.history_limit = history_limit
@@ -84,6 +85,7 @@ class MarketDataClient:
         self._manager = get_default_manager(
             data_source=self.data_source,
             mt5_config=mt5_config,
+            itick_config=itick_config,
             history_limit=history_limit,
         )
 
@@ -217,6 +219,8 @@ class MarketDataClient:
                 return self._manager.fetch_ohlcv(pair, timeframe, limit)
             except Exception as exc:
                 logger.warning("MT5 fetch failed for %s %s, falling back to Yahoo: %s", pair, timeframe, exc)
+        elif self.data_source != "yahoo":
+            return self._manager.fetch_ohlcv(pair, timeframe, limit)
         return self._download_yahoo_ohlcv(pair, timeframe)
 
     def fetch_ohlcv(

@@ -140,6 +140,19 @@ def _parse_object_map(raw: str | None) -> dict[str, dict[str, object]] | None:
     return parsed or None
 
 
+def _parse_json_dict(raw: str | None) -> dict[str, object]:
+    if raw is None:
+        return {}
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -150,6 +163,26 @@ class Settings:
     mt5_password: str
     mt5_server: str
     mt5_path: str
+    itick_api_key: str
+    itick_base_url: str
+    itick_ohlcv_path_template: str
+    itick_ticks_path_template: str
+    itick_api_key_header: str
+    itick_api_key_query_param: str
+    itick_auth_scheme: str
+    itick_symbol_format: str
+    itick_timeout_seconds: float
+    itick_timeframe_map: dict[str, object]
+    itick_extra_headers: dict[str, object]
+    enable_market_data_shadow: bool
+    market_data_shadow_candidate_source: str
+    market_data_shadow_timeframes: List[str]
+    market_data_shadow_log_path: str
+    market_data_shadow_cache_dir: str
+    market_data_shadow_ttl_hours: float
+    market_data_shadow_compare_signals: bool
+    market_data_shadow_max_close_diff_pips: float
+    market_data_shadow_max_staleness_seconds: int
     scan_interval_minutes: int
     market_data_cache_enabled: bool
     market_data_cache_dir: str
@@ -352,6 +385,35 @@ class Settings:
             mt5_password=os.getenv("MT5_PASSWORD", "").strip(),
             mt5_server=os.getenv("MT5_SERVER", "").strip(),
             mt5_path=os.getenv("MT5_PATH", "C:/Program Files/MetaTrader 5/terminal64.exe").strip(),
+            itick_api_key=os.getenv("ITICK_API_KEY", "").strip(),
+            itick_base_url=os.getenv("ITICK_BASE_URL", "").strip(),
+            itick_ohlcv_path_template=os.getenv("ITICK_OHLCV_PATH_TEMPLATE", "").strip(),
+            itick_ticks_path_template=os.getenv("ITICK_TICKS_PATH_TEMPLATE", "").strip(),
+            itick_api_key_header=os.getenv("ITICK_API_KEY_HEADER", "Authorization").strip(),
+            itick_api_key_query_param=os.getenv("ITICK_API_KEY_QUERY_PARAM", "").strip(),
+            itick_auth_scheme=os.getenv("ITICK_AUTH_SCHEME", "Bearer").strip(),
+            itick_symbol_format=os.getenv("ITICK_SYMBOL_FORMAT", "{base}{quote}").strip() or "{base}{quote}",
+            itick_timeout_seconds=max(1.0, float(os.getenv("ITICK_TIMEOUT_SECONDS", "10"))),
+            itick_timeframe_map=_parse_json_dict(os.getenv("ITICK_TIMEFRAME_MAP_JSON")),
+            itick_extra_headers=_parse_json_dict(os.getenv("ITICK_EXTRA_HEADERS_JSON")),
+            enable_market_data_shadow=_parse_bool(os.getenv("ENABLE_MARKET_DATA_SHADOW", "0"), default=False),
+            market_data_shadow_candidate_source=os.getenv("MARKET_DATA_SHADOW_CANDIDATE_SOURCE", "itick").strip().lower(),
+            market_data_shadow_timeframes=_parse_csv_upper(os.getenv("MARKET_DATA_SHADOW_TIMEFRAMES", "M5,M15,H1")),
+            market_data_shadow_log_path=os.getenv("MARKET_DATA_SHADOW_LOG_PATH", "logs/market_data_shadow.jsonl").strip(),
+            market_data_shadow_cache_dir=os.getenv("MARKET_DATA_SHADOW_CACHE_DIR", "data/cache/ohlcv_shadow").strip(),
+            market_data_shadow_ttl_hours=max(0.0, float(os.getenv("MARKET_DATA_SHADOW_TTL_HOURS", "0.01"))),
+            market_data_shadow_compare_signals=_parse_bool(
+                os.getenv("MARKET_DATA_SHADOW_COMPARE_SIGNALS", "1"),
+                default=True,
+            ),
+            market_data_shadow_max_close_diff_pips=max(
+                0.0,
+                float(os.getenv("MARKET_DATA_SHADOW_MAX_CLOSE_DIFF_PIPS", "2.0")),
+            ),
+            market_data_shadow_max_staleness_seconds=max(
+                1,
+                int(os.getenv("MARKET_DATA_SHADOW_MAX_STALENESS_SECONDS", "120")),
+            ),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
             market_data_cache_enabled=_parse_bool(os.getenv("MARKET_DATA_CACHE_ENABLED", "1"), default=True),
             market_data_cache_dir=os.getenv("MARKET_DATA_CACHE_DIR", "data/cache/ohlcv").strip(),

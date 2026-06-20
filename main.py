@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from config import Settings
 from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
+from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
 from services.telegram import TelegramSignalService
 
 
@@ -21,32 +23,48 @@ def configure_logging() -> None:
     )
 
 
-async def run_engine() -> None:
-    settings = Settings.from_env()
-    live_pairs = list(settings.pairs)
-    if settings.enable_exit_engine and settings.exit_profile_preset == "m15_vol_liq_v1":
-        live_pairs = list(LIVE_PROFILE_PAIRS)
+def _itick_config_from_settings(settings: Settings) -> dict[str, object]:
+    return {
+        "api_key": settings.itick_api_key,
+        "base_url": settings.itick_base_url,
+        "ohlcv_path_template": settings.itick_ohlcv_path_template,
+        "ticks_path_template": settings.itick_ticks_path_template,
+        "api_key_header": settings.itick_api_key_header,
+        "api_key_query_param": settings.itick_api_key_query_param,
+        "auth_scheme": settings.itick_auth_scheme,
+        "symbol_format": settings.itick_symbol_format,
+        "timeout_seconds": settings.itick_timeout_seconds,
+        "timeframe_map": settings.itick_timeframe_map,
+        "extra_headers": settings.itick_extra_headers,
+    }
 
-    market_data = MarketDataClient(
+
+def _build_market_data(
+    settings: Settings,
+    *,
+    data_source: str | None = None,
+    cache_dir: str | Path | None = None,
+    ttl_hours: float | None = None,
+) -> MarketDataClient:
+    return MarketDataClient(
         history_limit=settings.history_limit,
-        data_source=settings.data_source,
+        data_source=data_source or settings.data_source,
         mt5_login=settings.mt5_login,
         mt5_password=settings.mt5_password,
         mt5_server=settings.mt5_server,
         mt5_path=settings.mt5_path,
+        itick_config=_itick_config_from_settings(settings),
         cache_config=MarketDataCacheConfig(
             enabled=settings.market_data_cache_enabled,
-            cache_dir=settings.market_data_cache_dir,
-            ttl_hours=settings.market_data_cache_ttl_hours,
+            cache_dir=cache_dir or settings.market_data_cache_dir,
+            ttl_hours=settings.market_data_cache_ttl_hours if ttl_hours is None else ttl_hours,
             mode=settings.market_data_cache_mode,
         ),
     )
-    news_filter = NewsFilter(
-        blackout_before_minutes=settings.news_blackout_before_minutes,
-        blackout_after_minutes=settings.news_blackout_after_minutes,
-        surprise_threshold=settings.news_surprise_threshold,
-    )
-    engine = SignalEngine(
+
+
+def _build_signal_engine(settings: Settings, market_data: MarketDataClient, news_filter: NewsFilter) -> SignalEngine:
+    return SignalEngine(
         market_data=market_data,
         news_filter=news_filter,
         htf_timeframe=settings.htf_timeframe,
@@ -122,6 +140,48 @@ async def run_engine() -> None:
         live_exit_liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
         live_exit_liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
     )
+
+
+async def run_engine() -> None:
+    settings = Settings.from_env()
+    live_pairs = list(settings.pairs)
+    if settings.enable_exit_engine and settings.exit_profile_preset == "m15_vol_liq_v1":
+        live_pairs = list(LIVE_PROFILE_PAIRS)
+
+    market_data = _build_market_data(settings)
+    news_filter = NewsFilter(
+        blackout_before_minutes=settings.news_blackout_before_minutes,
+        blackout_after_minutes=settings.news_blackout_after_minutes,
+        surprise_threshold=settings.news_surprise_threshold,
+    )
+    engine = _build_signal_engine(settings, market_data, news_filter)
+    shadow_logger: MarketDataShadowLogger | None = None
+    shadow_engine: SignalEngine | None = None
+    shadow_market_data: MarketDataClient | None = None
+    if settings.enable_market_data_shadow:
+        shadow_cache_dir = Path(settings.market_data_shadow_cache_dir) / settings.market_data_shadow_candidate_source
+        shadow_market_data = _build_market_data(
+            settings,
+            data_source=settings.market_data_shadow_candidate_source,
+            cache_dir=shadow_cache_dir,
+            ttl_hours=settings.market_data_shadow_ttl_hours,
+        )
+        shadow_logger = MarketDataShadowLogger(
+            MarketDataShadowSettings(
+                enabled=True,
+                primary_source=settings.data_source,
+                candidate_source=settings.market_data_shadow_candidate_source,
+                timeframes=tuple(settings.market_data_shadow_timeframes),
+                log_path=settings.market_data_shadow_log_path,
+                max_close_diff_pips=settings.market_data_shadow_max_close_diff_pips,
+                max_staleness_seconds=settings.market_data_shadow_max_staleness_seconds,
+                compare_signals=settings.market_data_shadow_compare_signals,
+            ),
+            primary_client=market_data,
+            candidate_client=shadow_market_data,
+        )
+        if settings.market_data_shadow_compare_signals:
+            shadow_engine = _build_signal_engine(settings, shadow_market_data, news_filter)
     telegram = TelegramSignalService(
         token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
@@ -156,11 +216,22 @@ async def run_engine() -> None:
                 sent_count,
                 len(live_pairs),
             )
+            if shadow_logger is not None:
+                try:
+                    await asyncio.to_thread(shadow_logger.compare_market_data, live_pairs)
+                    if shadow_engine is not None:
+                        shadow_signals = await asyncio.to_thread(shadow_engine.scan_pairs, live_pairs)
+                        shadow_logger.compare_signals(signals, shadow_signals)
+                except Exception as exc:
+                    logger.warning("Market data shadow cycle failed: %s", exc)
 
             elapsed = time.monotonic() - cycle_started
             sleep_for = max(1.0, settings.scan_interval_minutes * 60 - elapsed)
             await asyncio.sleep(sleep_for)
     finally:
+        market_data.close()
+        if shadow_market_data is not None:
+            shadow_market_data.close()
         await telegram.close()
 
 

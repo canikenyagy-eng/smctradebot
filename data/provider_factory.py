@@ -16,11 +16,10 @@ from data.market_data_base import (
     MarketDataProvider,
     get_provider,
     list_providers,
-    register_provider,
-    PROVIDER_REGISTRY,
 )
 
 # Import providers to register them
+from data.itick_provider import ItickConfig, ItickMarketDataProvider
 from data.mt5_provider import MT5MarketDataProvider
 from data.yahoo_provider import YahooMarketDataProvider
 
@@ -91,6 +90,11 @@ class MarketDataManager:
                 path=self.provider_config.get("path", ""),
             )
             return provider_class(config=config, history_limit=self.history_limit)
+        if self.provider_name == "itick":
+            return provider_class(
+                config=ItickConfig.from_dict(self.provider_config),
+                history_limit=self.history_limit,
+            )
         else:
             return provider_class(history_limit=self.history_limit)
 
@@ -199,20 +203,23 @@ class MarketDataManager:
 def get_default_manager(
     data_source: str = "yahoo",
     mt5_config: Optional[dict] = None,
+    itick_config: Optional[dict] = None,
     history_limit: int = 500,
 ) -> MarketDataManager:
     """Get default market data manager.
 
     Args:
-        data_source: Data source name ("yahoo" or "mt5")
+        data_source: Data source name ("yahoo", "mt5", or "itick")
         mt5_config: MT5 configuration (if using mt5)
+        itick_config: iTick configuration (if using itick)
         history_limit: Default history limit
 
     Returns:
         MarketDataManager instance
     """
-    return MarketDataManager.get_instance(
+    provider_config = mt5_config if data_source == "mt5" else itick_config
+    return MarketDataManager(
         provider_name=data_source,
-        provider_config=mt5_config,
+        provider_config=provider_config,
         history_limit=history_limit,
     )
