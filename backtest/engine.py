@@ -577,6 +577,14 @@ class BacktestEngine:
         self._rng = build_rng(self.execution_settings.random_seed)
         self._snapshot_config_key = self._build_snapshot_config_key()
 
+    def _evaluation_step_for_pair(self, pair: str) -> int:
+        profile_getter = getattr(self.signal_engine, "pair_runtime_profile", None)
+        profile = profile_getter(pair) if callable(profile_getter) else None
+        step = getattr(profile, "evaluation_step", None)
+        if step is None:
+            return self.evaluation_step
+        return max(1, int(step))
+
     @staticmethod
     def _coerce_end_time(end_time: object | None) -> pd.Timestamp | None:
         if end_time is None:
@@ -1253,6 +1261,7 @@ class BacktestEngine:
         score_observations: list[int] = []
         evaluations = 0
         cursor = self.warmup_bars
+        pair_evaluation_step = self._evaluation_step_for_pair(pair)
         if evaluation_start_time is not None:
             start_ts = pd.Timestamp(evaluation_start_time)
             if start_ts.tzinfo is None and trigger_index.tz is not None:
@@ -1324,20 +1333,20 @@ class BacktestEngine:
 
             if not decision.accepted or decision.signal is None:
                 rejection_counts[decision.rejection_stage or "unknown"] += 1
-                cursor += self.evaluation_step
+                cursor += pair_evaluation_step
                 continue
             if decision.regime_label:
                 regime_acceptances[decision.regime_label.upper()] += 1
 
             if equity_state is not None and not equity_state.allow_new_trade():
                 rejection_counts["equity_halt"] += 1
-                cursor += self.evaluation_step
+                cursor += pair_evaluation_step
                 continue
 
             release_allowed, release_drop = self.signal_engine.gate_signal_release(decision.signal, commit=True)
             if not release_allowed:
                 rejection_counts[(release_drop.stage if release_drop is not None else "release_gate")] += 1
-                cursor += self.evaluation_step
+                cursor += pair_evaluation_step
                 continue
 
             base_risk_multiplier = equity_state.current_risk_multiplier() if equity_state is not None else 1.0
@@ -1355,7 +1364,7 @@ class BacktestEngine:
             )
             if meta_decision.enabled and meta_decision.mode == "hard_gate" and not meta_decision.accepted:
                 rejection_counts["meta_label"] += 1
-                cursor += self.evaluation_step
+                cursor += pair_evaluation_step
                 continue
 
             portfolio_decision = (
@@ -1383,7 +1392,7 @@ class BacktestEngine:
             )
             if trade is None:
                 rejection_counts[entry_rejection or "entry_not_filled"] += 1
-                cursor += self.evaluation_step
+                cursor += pair_evaluation_step
                 continue
 
             trades.append(trade)
@@ -1456,7 +1465,8 @@ class BacktestEngine:
         self._rng = build_rng(self.execution_settings.random_seed)
         equity_state = EquityProtectionState(self.equity_protection_settings) if self.equity_protection_settings.enabled else None
         portfolio_state = PortfolioLayerState(self.portfolio_layer_settings)
-        reports = [self.run_pair(pair, equity_state=equity_state, portfolio_state=portfolio_state) for pair in pairs]
+        pair_list = list(pairs)
+        reports = [self.run_pair(pair, equity_state=equity_state, portfolio_state=portfolio_state) for pair in pair_list]
         finished_at = datetime.now(timezone.utc)
         parameters = {
             "ltf_timeframe": self.signal_engine.ltf_timeframe,
@@ -1474,6 +1484,10 @@ class BacktestEngine:
             "max_hold_bars": self.max_hold_bars,
             "warmup_bars": self.warmup_bars,
             "evaluation_step": self.evaluation_step,
+            "pair_evaluation_steps": {
+                str(pair): self._evaluation_step_for_pair(str(pair))
+                for pair in pair_list
+            },
             "min_score": self.signal_engine.min_score,
             "risk_reward": self.signal_engine.risk_reward,
             "swing_window": self.signal_engine.swing_window,

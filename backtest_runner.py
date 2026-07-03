@@ -31,6 +31,7 @@ from backtest.validation import (
 )
 from backtest.walk_forward import WalkForwardResult, WalkForwardRunner
 from config import Settings
+from core.pair_profiles import build_pair_runtime_profiles
 from core.regime_analytics import analyze_regime_performance_from_run, export_regime_report
 from core.signal_engine import SignalEngine
 from core.meta_optimizer import (
@@ -656,6 +657,14 @@ def build_signal_engine(
         range_min_trigger_strength=settings.range_min_trigger_strength,
         require_displacement_in_contraction=settings.require_displacement_in_contraction,
         session_min_score=settings.session_min_score,
+        enable_session_gate=settings.enable_session_gate,
+        session_gate_windows_utc=settings.session_gate_windows_utc,
+        session_gate_backtest_only=settings.session_gate_backtest_only,
+        allow_live_session_gate=settings.allow_live_session_gate,
+        enable_regime_label_gate=settings.enable_regime_label_gate,
+        regime_label_blocklist=settings.regime_label_blocklist,
+        regime_gate_backtest_only=settings.regime_gate_backtest_only,
+        allow_live_regime_gate=settings.allow_live_regime_gate,
         enable_smt_confirmation=settings.enable_smt_confirmation,
         smt_hard_gate=settings.smt_hard_gate,
         smt_min_strength=settings.smt_min_strength,
@@ -709,6 +718,14 @@ def build_signal_engine(
         live_exit_liquidity_trailing_enabled=settings.exit_liquidity_trailing_enabled,
         live_exit_liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
         live_exit_liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
+        pair_runtime_profiles=build_pair_runtime_profiles(
+            settings.pair_profiles,
+            enabled=settings.enable_pair_profiles,
+            session_backtest_only=settings.pair_profiles_backtest_only,
+            allow_live_session=settings.allow_live_pair_profiles,
+            regime_backtest_only=settings.pair_profiles_backtest_only,
+            allow_live_regime=settings.allow_live_pair_profiles,
+        ),
     )
 
 

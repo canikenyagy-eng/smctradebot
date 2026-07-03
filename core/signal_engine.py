@@ -19,8 +19,11 @@ from core.correlation import CorrelationCap, SignalCandidate
 from core.entry import EntryPlan, build_entry_plan
 from core.expectancy_engine_v3 import ExpectancyEngine, ExpectancySettings
 from core.live_profile import LiveProfileSelector, LiveProfileSettings
+from core.pair_profiles import PairRuntimeProfile, clean_pair
 from core.portfolio import CurrencyExposureRecord, exposure_expiry, signal_currency_deltas
+from core.regime_gate import RegimeGate, RegimeGateSettings
 from core.scoring import ScoreBreakdown, calculate_score_details, score_session_timing
+from core.session_gate import SessionGate, SessionGateSettings
 from core.shadow import ShadowFeatureContext, analyze_shadow_context
 from core.trade_management import build_trade_management_plan
 from core.trade_gate_v2 import TradeGateV2, TradeGateSettings
@@ -126,6 +129,14 @@ class SignalEngine:
         range_min_trigger_strength: int = 8,
         require_displacement_in_contraction: bool = True,
         session_min_score: int = 5,
+        enable_session_gate: bool = False,
+        session_gate_windows_utc: tuple[tuple[int, int], ...] | list[tuple[int, int]] | None = None,
+        session_gate_backtest_only: bool = True,
+        allow_live_session_gate: bool = False,
+        enable_regime_label_gate: bool = False,
+        regime_label_blocklist: tuple[str, ...] | list[str] | None = None,
+        regime_gate_backtest_only: bool = True,
+        allow_live_regime_gate: bool = False,
         enable_smt_confirmation: bool = True,
         smt_hard_gate: bool = False,
         smt_min_strength: float = 60.0,
@@ -178,6 +189,7 @@ class SignalEngine:
         live_exit_liquidity_trailing_enabled: bool = False,
         live_exit_liquidity_lookback_bars: int = 8,
         live_exit_liquidity_buffer_pips: float = 1.0,
+        pair_runtime_profiles: dict[str, PairRuntimeProfile] | None = None,
         # Trade Gate v2
         enable_trade_gate_v2: bool = False,
     ) -> None:
@@ -202,6 +214,37 @@ class SignalEngine:
         self.range_min_trigger_strength = max(0, min(20, range_min_trigger_strength))
         self.require_displacement_in_contraction = require_displacement_in_contraction
         self.session_min_score = max(0, min(20, session_min_score))
+        self._session_gate = SessionGate(
+            SessionGateSettings(
+                enabled=enable_session_gate,
+                windows_utc=tuple(session_gate_windows_utc or ()),
+                backtest_only=session_gate_backtest_only,
+                allow_live=allow_live_session_gate,
+            )
+        )
+        self._regime_gate = RegimeGate(
+            RegimeGateSettings(
+                enabled=enable_regime_label_gate,
+                blocked_regimes=tuple(regime_label_blocklist or ()),
+                backtest_only=regime_gate_backtest_only,
+                allow_live=allow_live_regime_gate,
+            )
+        )
+        self._pair_profiles = {
+            clean_pair(pair): profile.sanitized()
+            for pair, profile in (pair_runtime_profiles or {}).items()
+            if clean_pair(pair)
+        }
+        self._pair_session_gates = {
+            pair: SessionGate(profile.session_gate_settings)
+            for pair, profile in self._pair_profiles.items()
+            if profile.session_gate_settings is not None
+        }
+        self._pair_regime_gates = {
+            pair: RegimeGate(profile.regime_gate_settings)
+            for pair, profile in self._pair_profiles.items()
+            if profile.regime_gate_settings is not None
+        }
         self.enable_smt_confirmation = enable_smt_confirmation
         self.smt_hard_gate = smt_hard_gate
         self.smt_min_strength = max(0.0, min(100.0, smt_min_strength))
@@ -296,13 +339,13 @@ class SignalEngine:
         self._currency_exposure_records: list[CurrencyExposureRecord] = []
 
     @staticmethod
-    def _log_rejection(pair: str, stage: str, reason: str, **context: object) -> None:
+    def _log_rejection(pair: str, stage: str, rejection_reason: str, **context: object) -> None:
         if context:
             extra = ", ".join(f"{key}={value}" for key, value in context.items())
-            logger.info("[%s] filtered at %s: %s | %s", pair, stage, reason, extra)
+            logger.info("[%s] filtered at %s: %s | %s", pair, stage, rejection_reason, extra)
             return
 
-        logger.info("[%s] filtered at %s: %s", pair, stage, reason)
+        logger.info("[%s] filtered at %s: %s", pair, stage, rejection_reason)
 
     @staticmethod
     def _log_acceptance(signal: TradeSignal, score: ScoreBreakdown) -> None:
@@ -325,6 +368,12 @@ class SignalEngine:
             signal.trigger_strength,
             score.shadow_bonus,
         )
+
+    def _pair_profile(self, pair: str) -> PairRuntimeProfile | None:
+        return self._pair_profiles.get(clean_pair(pair))
+
+    def pair_runtime_profile(self, pair: str) -> PairRuntimeProfile | None:
+        return self._pair_profile(pair)
 
     @staticmethod
     def _side_from_direction(direction: str | None) -> Optional[str]:
@@ -847,6 +896,33 @@ class SignalEngine:
                 news_assessment=news_assessment,
             )
 
+        pair_key = clean_pair(pair)
+        pair_profile = self._pair_profile(pair_key)
+        pair_min_score = pair_profile.min_score if pair_profile and pair_profile.min_score is not None else self.min_score
+        pair_profile_meta = pair_profile.to_dict() if pair_profile is not None else None
+        session_gate_for_pair = self._pair_session_gates.get(pair_key, self._session_gate)
+        regime_gate_for_pair = self._pair_regime_gates.get(pair_key, self._regime_gate)
+
+        signal_time = trigger_frame.index[-1].to_pydatetime()
+        session_gate = session_gate_for_pair.evaluate(signal_time, self.runtime_mode)
+        if not session_gate.allowed:
+            details = {
+                **session_gate.to_dict(),
+                "windows_utc": session_gate_for_pair.settings.to_dict().get("windows_utc", []),
+                "pair_profile": pair_profile_meta,
+            }
+            if emit_logs:
+                self._log_rejection(pair, "session_gate", "outside allowed session window", **details)
+            return SignalEvaluation(
+                accepted=False,
+                signal=None,
+                rejection_stage="session_gate",
+                rejection_reason="outside allowed session window",
+                details=details,
+                score_breakdown=None,
+                news_assessment=news_assessment,
+            )
+
         structure = detect_bos_choch(ltf, window=self.swing_window)
         liquidity: LiquidityContext = analyze_liquidity(ltf, swing_window=self.swing_window)
         current_price = float(trigger_frame["close"].iloc[-1])
@@ -880,8 +956,28 @@ class SignalEngine:
                 details=details,
                 score_breakdown=None,
                 news_assessment=news_assessment,
+                )
+
+        regime_gate = regime_gate_for_pair.evaluate(regime_label, self.runtime_mode)
+        if not regime_gate.allowed:
+            details = {
+                **regime_gate.to_dict(),
+                "regime_direction": regime.direction.upper(),
+                "pair_profile": pair_profile_meta,
+            }
+            if emit_logs:
+                self._log_rejection(pair, "regime_gate", "blocked regime label", **details)
+            return SignalEvaluation(
+                accepted=False,
+                signal=None,
+                rejection_stage="regime_gate",
+                rejection_reason="blocked regime label",
+                details=details,
+                score_breakdown=None,
+                news_assessment=news_assessment,
+                regime_label=regime_label,
             )
-        
+
         trigger: TriggerContext = analyze_trigger(
             trigger_frame,
             swing_window=max(2, self.swing_window - 1),
@@ -995,7 +1091,7 @@ class SignalEngine:
             regime=regime,
             trigger=trigger,
             news=news,
-            signal_time=trigger_frame.index[-1].to_pydatetime(),
+            signal_time=signal_time,
             shadow=shadow,
             adaptive_weights=self._adaptive_weight_settings if self.enable_adaptive_weights else None,
             structure_quality_bonus=structure_quality.bonus,
@@ -1006,7 +1102,7 @@ class SignalEngine:
 
         recommended_threshold = self._dynamic_threshold_tracker.recommended_threshold(self.runtime_mode)
         dynamic_active = self._dynamic_threshold_tracker.is_active(self.runtime_mode)
-        threshold_used = self.min_score
+        threshold_used = pair_min_score
         if (
             dynamic_active
             and recommended_threshold is not None
@@ -1033,8 +1129,10 @@ class SignalEngine:
             details = {
                 "score": score.total,
                 "threshold": threshold_used,
-                "static_min_score": self.min_score,
+                "static_min_score": pair_min_score,
+                "global_min_score": self.min_score,
                 "recommended_threshold": recommended_threshold,
+                "pair_profile": pair_profile_meta,
                 "regime_label": regime_label,
                 "regime_direction": regime_direction,
                 "htf": score.htf_alignment,
@@ -1102,7 +1200,7 @@ class SignalEngine:
             )
 
         if self.session_min_score > 0 and score.session_timing < self.session_min_score:
-            session_now = trigger_frame.index[-1].to_pydatetime()
+            session_now = signal_time
             details = {
                 "session_score": score.session_timing,
                 "min_session_score": self.session_min_score,
@@ -1191,7 +1289,7 @@ class SignalEngine:
             trigger_strength=trigger.strength,
             structure_event=(structure.event or "NONE").upper(),
             structure_trend=structure.trend.upper(),
-            generated_at=trigger_frame.index[-1].to_pydatetime(),
+            generated_at=signal_time,
             score_breakdown=score,
             meta={
                 "score_breakdown": score.contribution_dict(),
@@ -1203,7 +1301,9 @@ class SignalEngine:
                 "score_raw_total": score_meta.get("raw_total"),
                 "score_weighted_total": score_meta.get("weighted_total"),
                 "threshold": {
-                    "static_min_score": self.min_score,
+                    "static_min_score": pair_min_score,
+                    "global_min_score": self.min_score,
+                    "pair_min_score": pair_min_score,
                     "used": threshold_used,
                     "recommended": recommended_threshold,
                     "dynamic_enabled": dynamic_active,
@@ -1212,6 +1312,7 @@ class SignalEngine:
                     ),
                 },
                 "live_profile": live_profile_plan.to_dict(),
+                "pair_profile": pair_profile_meta,
             },
         )
         first_partial = live_profile_plan.first_partial()
@@ -1291,7 +1392,8 @@ class SignalEngine:
                 "trigger": trigger.direction.upper(),
                 "source": source,
                 "threshold": {
-                    "static_min_score": self.min_score,
+                    "static_min_score": pair_min_score,
+                    "global_min_score": self.min_score,
                     "used": threshold_used,
                     "recommended": recommended_threshold,
                     "dynamic_enabled": dynamic_active,
@@ -1301,6 +1403,7 @@ class SignalEngine:
                 },
                 "adaptive_weights": score_meta.get("adaptive_weights"),
                 "score_normalization": normalization_meta,
+                "pair_profile": pair_profile_meta,
                 "structure_quality": structure_quality.to_dict(),
                 "entry": {
                     "mode": entry_plan.mode,

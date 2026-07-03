@@ -73,6 +73,31 @@ def _parse_bool(raw: str, default: bool = False) -> bool:
     return default
 
 
+def _parse_session_windows(raw: str) -> List[tuple[int, int]]:
+    windows: List[tuple[int, int]] = []
+    for chunk in raw.split(","):
+        text = chunk.strip()
+        if not text:
+            continue
+        separator = "-" if "-" in text else ":"
+        if separator not in text:
+            continue
+        left, right = text.split(separator, 1)
+        try:
+            start = int(left.strip())
+            end = int(right.strip())
+        except ValueError:
+            continue
+        start = max(0, min(23, start))
+        end = max(0, min(24, end))
+        if start == end:
+            continue
+        item = (start, end)
+        if item not in windows:
+            windows.append(item)
+    return windows
+
+
 def _parse_optional_int(raw: str | None) -> int | None:
     if raw is None:
         return None
@@ -184,6 +209,12 @@ class Settings:
     market_data_shadow_max_close_diff_pips: float
     market_data_shadow_max_staleness_seconds: int
     scan_interval_minutes: int
+    enable_live_mode: bool
+    live_mode: str
+    enable_pair_profiles: bool
+    pair_profiles: dict[str, object]
+    pair_profiles_backtest_only: bool
+    allow_live_pair_profiles: bool
     market_data_cache_enabled: bool
     market_data_cache_dir: str
     market_data_cache_ttl_hours: float
@@ -236,6 +267,14 @@ class Settings:
     range_min_trigger_strength: int
     require_displacement_in_contraction: bool
     session_min_score: int
+    enable_session_gate: bool
+    session_gate_windows_utc: List[tuple[int, int]]
+    session_gate_backtest_only: bool
+    allow_live_session_gate: bool
+    enable_regime_label_gate: bool
+    regime_label_blocklist: List[str]
+    regime_gate_backtest_only: bool
+    allow_live_regime_gate: bool
     enable_smt_confirmation: bool
     smt_hard_gate: bool
     smt_min_strength: float
@@ -415,6 +454,12 @@ class Settings:
                 int(os.getenv("MARKET_DATA_SHADOW_MAX_STALENESS_SECONDS", "120")),
             ),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
+            enable_live_mode=_parse_bool(os.getenv("ENABLE_LIVE_MODE", "0"), default=False),
+            live_mode=os.getenv("LIVE_MODE", "balanced").strip().lower(),
+            enable_pair_profiles=_parse_bool(os.getenv("ENABLE_PAIR_PROFILES", "0"), default=False),
+            pair_profiles=_parse_json_dict(os.getenv("PAIR_PROFILES_JSON")),
+            pair_profiles_backtest_only=_parse_bool(os.getenv("PAIR_PROFILES_BACKTEST_ONLY", "1"), default=True),
+            allow_live_pair_profiles=_parse_bool(os.getenv("ALLOW_LIVE_PAIR_PROFILES", "0"), default=False),
             market_data_cache_enabled=_parse_bool(os.getenv("MARKET_DATA_CACHE_ENABLED", "1"), default=True),
             market_data_cache_dir=os.getenv("MARKET_DATA_CACHE_DIR", "data/cache/ohlcv").strip(),
             market_data_cache_ttl_hours=max(0.0, float(os.getenv("MARKET_DATA_CACHE_TTL_HOURS", "12"))),
@@ -470,6 +515,14 @@ class Settings:
                 default=True,
             ),
             session_min_score=max(0, min(20, int(os.getenv("SESSION_MIN_SCORE", "5")))),
+            enable_session_gate=_parse_bool(os.getenv("ENABLE_SESSION_GATE", "0"), default=False),
+            session_gate_windows_utc=_parse_session_windows(os.getenv("SESSION_GATE_WINDOWS_UTC", "")),
+            session_gate_backtest_only=_parse_bool(os.getenv("SESSION_GATE_BACKTEST_ONLY", "1"), default=True),
+            allow_live_session_gate=_parse_bool(os.getenv("ALLOW_LIVE_SESSION_GATE", "0"), default=False),
+            enable_regime_label_gate=_parse_bool(os.getenv("ENABLE_REGIME_LABEL_GATE", "0"), default=False),
+            regime_label_blocklist=_parse_csv_upper(os.getenv("REGIME_LABEL_BLOCKLIST", "")),
+            regime_gate_backtest_only=_parse_bool(os.getenv("REGIME_GATE_BACKTEST_ONLY", "1"), default=True),
+            allow_live_regime_gate=_parse_bool(os.getenv("ALLOW_LIVE_REGIME_GATE", "0"), default=False),
             enable_smt_confirmation=_parse_bool(os.getenv("ENABLE_SMT_CONFIRMATION", "1"), default=True),
             smt_hard_gate=_parse_bool(os.getenv("SMT_HARD_GATE", "0"), default=False),
             smt_min_strength=max(0.0, min(100.0, float(os.getenv("SMT_MIN_STRENGTH", "60")))),

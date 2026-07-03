@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from config import Settings
+from core.pair_profiles import PairRuntimeProfile, build_pair_runtime_profiles, clean_pair
 from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
@@ -13,7 +15,31 @@ from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadow
 from services.telegram import TelegramSignalService
 
 
-LIVE_PROFILE_PAIRS = ("EURUSD", "USDJPY")
+LIVE_PROFILE_PAIRS = ("EURUSD", "EURJPY", "CADJPY")
+LIVE_MODE_BALANCED_PAIRS = ("EURUSD", "EURJPY", "CADJPY")
+LIVE_MODE_AGGRESSIVE_PAIRS = ("EURUSD", "EURJPY", "CADJPY")
+LIVE_MODE_CONSERVATIVE_PAIRS = ("EURUSD",)
+LIVE_MODE_MIN_SCORE = 80
+LIVE_MODE_AGGRESSIVE_MIN_SCORE = 78
+LIVE_MODE_REGIME_BLOCKLIST = ("TREND",)
+LIVE_MODE_BALANCED_SESSION_UTC = ((7, 16),)
+LIVE_MODE_AGGRESSIVE_SESSION_UTC = ((7, 16),)
+LIVE_MODE_CONSERVATIVE_SESSION_UTC = ((12, 16),)
+
+
+@dataclass(frozen=True)
+class EffectiveLiveMode:
+    enabled: bool
+    name: str
+    pairs: tuple[str, ...]
+    min_score: int
+    enable_session_gate: bool
+    session_gate_windows_utc: tuple[tuple[int, int], ...]
+    allow_live_session_gate: bool
+    enable_regime_label_gate: bool
+    regime_label_blocklist: tuple[str, ...]
+    allow_live_regime_gate: bool
+    description: str
 
 
 def configure_logging() -> None:
@@ -63,14 +89,151 @@ def _build_market_data(
     )
 
 
-def _build_signal_engine(settings: Settings, market_data: MarketDataClient, news_filter: NewsFilter) -> SignalEngine:
+def _legacy_live_pairs(settings: Settings) -> tuple[str, ...]:
+    if settings.enable_exit_engine and settings.exit_profile_preset == "m15_vol_liq_v1":
+        return LIVE_PROFILE_PAIRS
+    return tuple(settings.pairs)
+
+
+def _effective_live_mode(settings: Settings) -> EffectiveLiveMode:
+    legacy_pairs = _legacy_live_pairs(settings)
+    if not settings.enable_live_mode:
+        return EffectiveLiveMode(
+            enabled=False,
+            name="legacy",
+            pairs=legacy_pairs,
+            min_score=settings.min_score,
+            enable_session_gate=settings.enable_session_gate,
+            session_gate_windows_utc=tuple(settings.session_gate_windows_utc),
+            allow_live_session_gate=settings.allow_live_session_gate,
+            enable_regime_label_gate=settings.enable_regime_label_gate,
+            regime_label_blocklist=tuple(settings.regime_label_blocklist),
+            allow_live_regime_gate=settings.allow_live_regime_gate,
+            description="legacy settings from env",
+        )
+
+    mode = settings.live_mode.strip().lower()
+    if mode == "balanced":
+        return EffectiveLiveMode(
+            enabled=True,
+            name="balanced",
+            pairs=LIVE_MODE_BALANCED_PAIRS,
+            min_score=LIVE_MODE_MIN_SCORE,
+            enable_session_gate=True,
+            session_gate_windows_utc=LIVE_MODE_BALANCED_SESSION_UTC,
+            allow_live_session_gate=True,
+            enable_regime_label_gate=True,
+            regime_label_blocklist=LIVE_MODE_REGIME_BLOCKLIST,
+            allow_live_regime_gate=True,
+            description="EURUSD+EURJPY+CADJPY 07-16 UTC score>=80 block TREND",
+        )
+    if mode == "aggressive":
+        return EffectiveLiveMode(
+            enabled=True,
+            name="aggressive",
+            pairs=LIVE_MODE_AGGRESSIVE_PAIRS,
+            min_score=LIVE_MODE_AGGRESSIVE_MIN_SCORE,
+            enable_session_gate=True,
+            session_gate_windows_utc=LIVE_MODE_AGGRESSIVE_SESSION_UTC,
+            allow_live_session_gate=True,
+            enable_regime_label_gate=True,
+            regime_label_blocklist=LIVE_MODE_REGIME_BLOCKLIST,
+            allow_live_regime_gate=True,
+            description="EURUSD+EURJPY+CADJPY 07-16 UTC score>=78 block TREND",
+        )
+    if mode == "conservative":
+        return EffectiveLiveMode(
+            enabled=True,
+            name="conservative",
+            pairs=LIVE_MODE_CONSERVATIVE_PAIRS,
+            min_score=LIVE_MODE_MIN_SCORE,
+            enable_session_gate=True,
+            session_gate_windows_utc=LIVE_MODE_CONSERVATIVE_SESSION_UTC,
+            allow_live_session_gate=True,
+            enable_regime_label_gate=True,
+            regime_label_blocklist=LIVE_MODE_REGIME_BLOCKLIST,
+            allow_live_regime_gate=True,
+            description="EURUSD 12-16 UTC score>=80 block TREND",
+        )
+
+    logging.getLogger("engine").warning(
+        "Unknown LIVE_MODE=%s; falling back to legacy settings", settings.live_mode
+    )
+    return EffectiveLiveMode(
+        enabled=False,
+        name="legacy",
+        pairs=legacy_pairs,
+        min_score=settings.min_score,
+        enable_session_gate=settings.enable_session_gate,
+        session_gate_windows_utc=tuple(settings.session_gate_windows_utc),
+        allow_live_session_gate=settings.allow_live_session_gate,
+        enable_regime_label_gate=settings.enable_regime_label_gate,
+        regime_label_blocklist=tuple(settings.regime_label_blocklist),
+        allow_live_regime_gate=settings.allow_live_regime_gate,
+        description="legacy fallback after invalid LIVE_MODE",
+    )
+
+
+def _format_windows(windows: tuple[tuple[int, int], ...]) -> str:
+    return ",".join(f"{start:02d}-{end:02d}" for start, end in windows) or "-"
+
+
+def _live_mode_pair_profile_payload(live_mode: EffectiveLiveMode) -> dict[str, dict[str, object]]:
+    if not live_mode.enabled:
+        return {}
+    return {
+        pair: {
+            "min_score": live_mode.min_score,
+            "session_windows_utc": [f"{start:02d}-{end:02d}" for start, end in live_mode.session_gate_windows_utc],
+            "regime_blocklist": list(live_mode.regime_label_blocklist),
+            "description": live_mode.description,
+        }
+        for pair in live_mode.pairs
+    }
+
+
+def _build_live_pair_profiles(settings: Settings, live_mode: EffectiveLiveMode) -> dict[str, PairRuntimeProfile]:
+    if settings.enable_pair_profiles and settings.pair_profiles:
+        if not settings.allow_live_pair_profiles:
+            logging.getLogger("engine").warning(
+                "ENABLE_PAIR_PROFILES=1 but ALLOW_LIVE_PAIR_PROFILES=0; custom pair profiles are ignored in live"
+            )
+            return {}
+        return build_pair_runtime_profiles(
+            settings.pair_profiles,
+            enabled=True,
+            session_backtest_only=settings.pair_profiles_backtest_only,
+            allow_live_session=True,
+            regime_backtest_only=settings.pair_profiles_backtest_only,
+            allow_live_regime=True,
+        )
+
+    return build_pair_runtime_profiles(
+        _live_mode_pair_profile_payload(live_mode),
+        enabled=live_mode.enabled,
+        session_backtest_only=True,
+        allow_live_session=True,
+        regime_backtest_only=True,
+        allow_live_regime=True,
+    )
+
+
+def _build_signal_engine(
+    settings: Settings,
+    market_data: MarketDataClient,
+    news_filter: NewsFilter,
+    *,
+    live_mode: EffectiveLiveMode | None = None,
+    pair_profiles: dict[str, PairRuntimeProfile] | None = None,
+) -> SignalEngine:
+    mode = live_mode or _effective_live_mode(settings)
     return SignalEngine(
         market_data=market_data,
         news_filter=news_filter,
         htf_timeframe=settings.htf_timeframe,
         ltf_timeframe=settings.ltf_timeframe,
         trigger_timeframe=settings.trigger_timeframe,
-        min_score=settings.min_score,
+        min_score=mode.min_score,
         risk_reward=settings.risk_reward,
         swing_window=settings.swing_window,
         pair_correlation_threshold=settings.pair_correlation_threshold,
@@ -87,6 +250,14 @@ def _build_signal_engine(settings: Settings, market_data: MarketDataClient, news
         range_min_trigger_strength=settings.range_min_trigger_strength,
         require_displacement_in_contraction=settings.require_displacement_in_contraction,
         session_min_score=settings.session_min_score,
+        enable_session_gate=mode.enable_session_gate,
+        session_gate_windows_utc=mode.session_gate_windows_utc,
+        session_gate_backtest_only=settings.session_gate_backtest_only,
+        allow_live_session_gate=mode.allow_live_session_gate,
+        enable_regime_label_gate=mode.enable_regime_label_gate,
+        regime_label_blocklist=mode.regime_label_blocklist,
+        regime_gate_backtest_only=settings.regime_gate_backtest_only,
+        allow_live_regime_gate=mode.allow_live_regime_gate,
         enable_smt_confirmation=settings.enable_smt_confirmation,
         smt_hard_gate=settings.smt_hard_gate,
         smt_min_strength=settings.smt_min_strength,
@@ -139,14 +310,16 @@ def _build_signal_engine(settings: Settings, market_data: MarketDataClient, news
         live_exit_liquidity_trailing_enabled=settings.exit_liquidity_trailing_enabled,
         live_exit_liquidity_lookback_bars=settings.exit_liquidity_lookback_bars,
         live_exit_liquidity_buffer_pips=settings.exit_liquidity_buffer_pips,
+        pair_runtime_profiles=pair_profiles,
     )
 
 
 async def run_engine() -> None:
     settings = Settings.from_env()
-    live_pairs = list(settings.pairs)
-    if settings.enable_exit_engine and settings.exit_profile_preset == "m15_vol_liq_v1":
-        live_pairs = list(LIVE_PROFILE_PAIRS)
+    live_mode = _effective_live_mode(settings)
+    pair_profiles = _build_live_pair_profiles(settings, live_mode)
+    live_pairs = list(pair_profiles.keys()) if settings.enable_pair_profiles and settings.allow_live_pair_profiles and pair_profiles else list(live_mode.pairs)
+    live_pairs = [clean_pair(pair) for pair in live_pairs]
 
     market_data = _build_market_data(settings)
     news_filter = NewsFilter(
@@ -154,7 +327,7 @@ async def run_engine() -> None:
         blackout_after_minutes=settings.news_blackout_after_minutes,
         surprise_threshold=settings.news_surprise_threshold,
     )
-    engine = _build_signal_engine(settings, market_data, news_filter)
+    engine = _build_signal_engine(settings, market_data, news_filter, live_mode=live_mode, pair_profiles=pair_profiles)
     shadow_logger: MarketDataShadowLogger | None = None
     shadow_engine: SignalEngine | None = None
     shadow_market_data: MarketDataClient | None = None
@@ -181,7 +354,13 @@ async def run_engine() -> None:
             candidate_client=shadow_market_data,
         )
         if settings.market_data_shadow_compare_signals:
-            shadow_engine = _build_signal_engine(settings, shadow_market_data, news_filter)
+            shadow_engine = _build_signal_engine(
+                settings,
+                shadow_market_data,
+                news_filter,
+                live_mode=live_mode,
+                pair_profiles=pair_profiles,
+            )
     telegram = TelegramSignalService(
         token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
@@ -189,7 +368,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -197,6 +376,12 @@ async def run_engine() -> None:
         settings.exit_volatility_rr_floor,
         settings.exit_volatility_rr_cap,
         settings.exit_liquidity_trailing_enabled,
+        live_mode.name,
+        live_mode.enabled,
+        live_mode.min_score,
+        _format_windows(live_mode.session_gate_windows_utc) if live_mode.enable_session_gate else "-",
+        ",".join(live_mode.regime_label_blocklist) if live_mode.enable_regime_label_gate else "-",
+        ",".join(pair_profiles.keys()) if pair_profiles else "-",
     )
 
     try:
