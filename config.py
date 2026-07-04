@@ -182,6 +182,8 @@ def _parse_json_dict(raw: str | None) -> dict[str, object]:
 class Settings:
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_send_retries: int
+    telegram_retry_base_delay_seconds: float
     pairs: List[str]
     data_source: str
     mt5_login: int
@@ -208,6 +210,8 @@ class Settings:
     market_data_shadow_compare_signals: bool
     market_data_shadow_max_close_diff_pips: float
     market_data_shadow_max_staleness_seconds: int
+    enable_market_data_freshness_gate: bool
+    max_live_candle_age_seconds: int
     scan_interval_minutes: int
     enable_live_mode: bool
     live_mode: str
@@ -413,6 +417,11 @@ class Settings:
         return cls(
             telegram_bot_token=token,
             telegram_chat_id=chat_id,
+            telegram_send_retries=max(1, int(os.getenv("TELEGRAM_SEND_RETRIES", "3"))),
+            telegram_retry_base_delay_seconds=max(
+                0.1,
+                float(os.getenv("TELEGRAM_RETRY_BASE_DELAY_SECONDS", "1.0")),
+            ),
             pairs=_parse_pairs(
                 os.getenv(
                     "PAIRS",
@@ -452,6 +461,14 @@ class Settings:
             market_data_shadow_max_staleness_seconds=max(
                 1,
                 int(os.getenv("MARKET_DATA_SHADOW_MAX_STALENESS_SECONDS", "120")),
+            ),
+            enable_market_data_freshness_gate=_parse_bool(
+                os.getenv("ENABLE_MARKET_DATA_FRESHNESS_GATE", "0"),
+                default=False,
+            ),
+            max_live_candle_age_seconds=max(
+                60,
+                int(os.getenv("MAX_LIVE_CANDLE_AGE_SECONDS", "1800")),
             ),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
             enable_live_mode=_parse_bool(os.getenv("ENABLE_LIVE_MODE", "0"), default=False),
@@ -563,14 +580,14 @@ class Settings:
             score_normalization_method=os.getenv("SCORE_NORMALIZATION_METHOD", "minmax").strip().lower(),
             score_normalization_window=max(10, int(os.getenv("SCORE_NORMALIZATION_WINDOW", "200"))),
             score_normalization_scale_factor=max(0.0, float(os.getenv("SCORE_NORMALIZATION_SCALE_FACTOR", "1.0"))),
-            score_normalization_backtest_only=_parse_bool(os.getenv("SCORE_NORMALIZATION_BACKTEST_ONLY", "0"), default=False),
-            allow_live_score_normalization=_parse_bool(os.getenv("ALLOW_LIVE_SCORE_NORMALIZATION", "1"), default=True),
+            score_normalization_backtest_only=_parse_bool(os.getenv("SCORE_NORMALIZATION_BACKTEST_ONLY", "1"), default=True),
+            allow_live_score_normalization=_parse_bool(os.getenv("ALLOW_LIVE_SCORE_NORMALIZATION", "0"), default=False),
             enable_dynamic_threshold=_parse_bool(os.getenv("ENABLE_DYNAMIC_THRESHOLD", "0"), default=False),
             threshold_percentile=max(0.0, min(100.0, float(os.getenv("THRESHOLD_PERCENTILE", "80")))),
             threshold_rolling_window=max(10, int(os.getenv("THRESHOLD_ROLLING_WINDOW", "200"))),
             apply_dynamic_threshold=_parse_bool(os.getenv("APPLY_DYNAMIC_THRESHOLD", "0"), default=False),
-            dynamic_threshold_backtest_only=_parse_bool(os.getenv("DYNAMIC_THRESHOLD_BACKTEST_ONLY", "0"), default=False),
-            allow_live_dynamic_threshold=_parse_bool(os.getenv("ALLOW_LIVE_DYNAMIC_THRESHOLD", "1"), default=True),
+            dynamic_threshold_backtest_only=_parse_bool(os.getenv("DYNAMIC_THRESHOLD_BACKTEST_ONLY", "1"), default=True),
+            allow_live_dynamic_threshold=_parse_bool(os.getenv("ALLOW_LIVE_DYNAMIC_THRESHOLD", "0"), default=False),
             enable_feature_analytics=_parse_bool(os.getenv("ENABLE_FEATURE_ANALYTICS", "0"), default=False),
             export_meta_report=_parse_bool(os.getenv("EXPORT_META_REPORT", "0"), default=False),
             enable_regime_engine_v2=_parse_bool(os.getenv("ENABLE_REGIME_ENGINE_V2", "0"), default=False),

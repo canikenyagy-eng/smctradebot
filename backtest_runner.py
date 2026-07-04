@@ -692,6 +692,8 @@ def build_signal_engine(
         score_normalization_backtest_only=settings.score_normalization_backtest_only,
         allow_live_score_normalization=settings.allow_live_score_normalization,
         runtime_mode="backtest",
+        enable_market_data_freshness_gate=settings.enable_market_data_freshness_gate,
+        max_live_candle_age_seconds=settings.max_live_candle_age_seconds,
         enable_dynamic_threshold=settings.enable_dynamic_threshold,
         threshold_percentile=settings.threshold_percentile,
         threshold_rolling_window=settings.threshold_rolling_window,

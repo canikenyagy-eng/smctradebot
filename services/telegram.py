@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
 
 from aiogram import Bot
@@ -9,6 +10,8 @@ from aiogram.enums import ParseMode
 
 from core.signal_engine import TradeSignal
 from utils.dedup import SignalDeduplicator
+
+logger = logging.getLogger(__name__)
 
 
 def _format_signal(signal: TradeSignal) -> str:
@@ -44,11 +47,20 @@ def _format_signal(signal: TradeSignal) -> str:
 
 
 class TelegramSignalService:
-    def __init__(self, token: str, chat_id: str, dedup_cache_size: int = 2000) -> None:
+    def __init__(
+        self,
+        token: str,
+        chat_id: str,
+        dedup_cache_size: int = 2000,
+        send_retries: int = 3,
+        retry_base_delay_seconds: float = 1.0,
+    ) -> None:
         self.bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.chat_id = chat_id
         self.deduplicator = SignalDeduplicator(max_cache=dedup_cache_size)
         self._lock = asyncio.Lock()
+        self.send_retries = max(1, int(send_retries))
+        self.retry_base_delay_seconds = max(0.1, float(retry_base_delay_seconds))
 
     async def close(self) -> None:
         await self.bot.session.close()
@@ -60,11 +72,46 @@ class TelegramSignalService:
             if self.deduplicator.seen(fp):
                 return False
 
-        await self.bot.send_message(chat_id=self.chat_id, text=_format_signal(signal))
+        delivered = await self._send_message_with_retry(_format_signal(signal), signal)
+        if not delivered:
+            return False
 
         async with self._lock:
             self.deduplicator.remember(fp)
         return True
+
+    async def _send_message_with_retry(self, text: str, signal: TradeSignal) -> bool:
+        for attempt in range(1, self.send_retries + 1):
+            try:
+                await self.bot.send_message(chat_id=self.chat_id, text=text)
+                return True
+            except Exception as exc:
+                if attempt >= self.send_retries:
+                    logger.warning(
+                        "Telegram send failed for %s after %s attempts: %s",
+                        signal.symbol,
+                        attempt,
+                        exc,
+                    )
+                    return False
+
+                retry_after = getattr(exc, "retry_after", None)
+                delay = (
+                    float(retry_after)
+                    if retry_after is not None
+                    else self.retry_base_delay_seconds * (2 ** (attempt - 1))
+                )
+                delay = max(0.1, min(60.0, delay))
+                logger.warning(
+                    "Telegram send attempt %s/%s failed for %s: %s | retrying in %.1fs",
+                    attempt,
+                    self.send_retries,
+                    signal.symbol,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        return False
 
     async def send_debug_payload(self, signal: TradeSignal) -> None:
         payload = asdict(signal)

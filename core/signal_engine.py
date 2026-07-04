@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
 import pandas as pd
@@ -163,6 +163,8 @@ class SignalEngine:
         score_normalization_backtest_only: bool = True,
         allow_live_score_normalization: bool = False,
         runtime_mode: str = "live",
+        enable_market_data_freshness_gate: bool = False,
+        max_live_candle_age_seconds: int = 1800,
         enable_dynamic_threshold: bool = False,
         threshold_percentile: float = 80.0,
         threshold_rolling_window: int = 200,
@@ -262,6 +264,8 @@ class SignalEngine:
         self.portfolio_currency_net_cap = max(0, portfolio_currency_net_cap)
         self.portfolio_exposure_window_minutes = max(1, portfolio_exposure_window_minutes)
         self.runtime_mode = runtime_mode.lower().strip()
+        self.enable_market_data_freshness_gate = bool(enable_market_data_freshness_gate)
+        self.max_live_candle_age_seconds = max(1, int(max_live_candle_age_seconds))
         self.enable_adaptive_weights = enable_adaptive_weights
         self._adaptive_weight_settings = AdaptiveWeightSettings(
             enabled=enable_adaptive_weights,
@@ -677,6 +681,40 @@ class SignalEngine:
     def _side_direction(side: str) -> str:
         return "bullish" if side.upper() == "BUY" else "bearish"
 
+    def _check_live_data_freshness(
+        self,
+        *,
+        pair: str,
+        signal_time: datetime,
+        trigger_rows: int,
+    ) -> tuple[bool, dict[str, object]]:
+        if not self.enable_market_data_freshness_gate or self.runtime_mode != "live":
+            return True, {}
+
+        timestamp = signal_time
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - timestamp).total_seconds()
+        context = {
+            "pair": pair.upper().replace("/", ""),
+            "trigger_timeframe": self.trigger_timeframe,
+            "last_candle_time": timestamp.isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "max_age_seconds": self.max_live_candle_age_seconds,
+            "trigger_rows": trigger_rows,
+        }
+        if age_seconds < -60:
+            context["now_utc"] = now.isoformat()
+            return False, {**context, "reason": "trigger candle timestamp is in the future"}
+        if age_seconds > self.max_live_candle_age_seconds:
+            context["now_utc"] = now.isoformat()
+            return False, {**context, "reason": "trigger candle is stale"}
+        return True, context
+
     @staticmethod
     def _with_total(score: ScoreBreakdown, total: int) -> ScoreBreakdown:
         return ScoreBreakdown(
@@ -904,6 +942,25 @@ class SignalEngine:
         regime_gate_for_pair = self._pair_regime_gates.get(pair_key, self._regime_gate)
 
         signal_time = trigger_frame.index[-1].to_pydatetime()
+        fresh, freshness_context = self._check_live_data_freshness(
+            pair=pair,
+            signal_time=signal_time,
+            trigger_rows=len(trigger_frame),
+        )
+        if not fresh:
+            details = {**freshness_context, "pair_profile": pair_profile_meta}
+            if emit_logs:
+                self._log_rejection(pair, "data_freshness", details.get("reason", "stale market data"), **details)
+            return SignalEvaluation(
+                accepted=False,
+                signal=None,
+                rejection_stage="data_freshness",
+                rejection_reason=str(details.get("reason", "stale market data")),
+                details=details,
+                score_breakdown=None,
+                news_assessment=news_assessment,
+            )
+
         session_gate = session_gate_for_pair.evaluate(signal_time, self.runtime_mode)
         if not session_gate.allowed:
             details = {
