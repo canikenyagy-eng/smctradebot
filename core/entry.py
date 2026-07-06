@@ -146,6 +146,7 @@ def build_entry_plan(
     risk_reward: float,
     shadow: ShadowFeatureContext | None = None,
     enable_mitigation_entry: bool = True,
+    allow_market_fallback: bool = True,
     min_entry_score: int = 5,
     min_reaction_strength: float = 55.0,
 ) -> EntryPlan | None:
@@ -159,5 +160,8 @@ def build_entry_plan(
         )
         if mitigation_plan is not None:
             return mitigation_plan
+
+    if not allow_market_fallback:
+        return None
 
     return _build_market_plan(ltf_frame, side, current_price, risk_reward)

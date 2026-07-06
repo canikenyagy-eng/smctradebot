@@ -61,17 +61,19 @@ def _resolved_start_index(frame: pd.DataFrame, start_index: int | None) -> int:
     return min(start_index, len(frame) - 1)
 
 
-def assess_zone_lifecycle(
+def assess_zone_lifecycle_as_of(
     frame: pd.DataFrame,
     zone: PriceZone,
     *,
     start_index: int | None = None,
+    as_of_index: int | None = None,
 ) -> PriceZone:
     if frame.empty:
         return zone
 
     start_pos = _resolved_start_index(frame, start_index if start_index is not None else zone.created_index)
-    future = frame.iloc[start_pos + 1 :]
+    end_pos = len(frame) - 1 if as_of_index is None else min(max(int(as_of_index), start_pos), len(frame) - 1)
+    future = frame.iloc[start_pos + 1 : end_pos + 1]
     if future.empty:
         return zone
 
@@ -104,4 +106,18 @@ def assess_zone_lifecycle(
         invalidated=deepest_penetration >= 1.0,
         last_touch_index=last_touch_index,
         last_touch_at=last_touch_at,
+    )
+
+
+def assess_zone_lifecycle(
+    frame: pd.DataFrame,
+    zone: PriceZone,
+    *,
+    start_index: int | None = None,
+) -> PriceZone:
+    return assess_zone_lifecycle_as_of(
+        frame,
+        zone,
+        start_index=start_index,
+        as_of_index=len(frame) - 1 if not frame.empty else None,
     )

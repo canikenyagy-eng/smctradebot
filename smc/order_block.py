@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from smc.zones import PriceZone, assess_zone_lifecycle
+from smc.zones import PriceZone, assess_zone_lifecycle_as_of
 
 
 @dataclass(frozen=True)
@@ -135,7 +135,7 @@ def detect_order_blocks(
             source_index=block_index,
             strength=strength,
         )
-        zones.append(assess_zone_lifecycle(frame, zone, start_index=impulse_index))
+        zones.append(assess_zone_lifecycle_as_of(frame, zone, start_index=impulse_index, as_of_index=len(frame) - 1))
 
     return sorted(zones, key=lambda item: (item.created_index or -1, item.strength), reverse=True)
 

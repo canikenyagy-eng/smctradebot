@@ -174,6 +174,7 @@ def analyze_shadow_context(
     *,
     reference_pair: str | None = None,
     reference_frame: pd.DataFrame | None = None,
+    include_order_block: bool = True,
 ) -> ShadowFeatureContext:
     side_u = side.upper()
     side_dir = _side_direction(side_u)
@@ -195,21 +196,24 @@ def analyze_shadow_context(
     fvg_candidate = _pick_best_candidate(ltf_fvg, trigger_fvg)
     fvg_zone, fvg_frame, fvg_mitigation, fvg_score, fvg_summary = fvg_candidate
 
-    ltf_ob = _select_zone_candidate(
-        side_u,
-        current_price,
-        ltf_frame,
-        latest_order_block(ltf_frame, direction=side_dir),
-        "LTF",
-    )
-    trigger_ob = _select_zone_candidate(
-        side_u,
-        current_price,
-        trigger_frame,
-        latest_order_block(trigger_frame, direction=side_dir),
-        "TRIGGER",
-    )
-    ob_candidate = _pick_best_candidate(ltf_ob, trigger_ob)
+    if include_order_block:
+        ltf_ob = _select_zone_candidate(
+            side_u,
+            current_price,
+            ltf_frame,
+            latest_order_block(ltf_frame, direction=side_dir),
+            "LTF",
+        )
+        trigger_ob = _select_zone_candidate(
+            side_u,
+            current_price,
+            trigger_frame,
+            latest_order_block(trigger_frame, direction=side_dir),
+            "TRIGGER",
+        )
+        ob_candidate = _pick_best_candidate(ltf_ob, trigger_ob)
+    else:
+        ob_candidate = (None, None, None, 0, "ORDER_BLOCK: disabled by runtime settings")
     ob_zone, ob_frame, ob_mitigation, ob_score, ob_summary = ob_candidate
     entry_zone, entry_frame, entry_mitigation, entry_score, entry_summary = _pick_best_candidate(
         fvg_candidate,

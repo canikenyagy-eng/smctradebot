@@ -573,8 +573,17 @@ def build_score_vector(
     # Structure alignment: from trigger strength
     structure_alignment = trigger.strength if trigger else 0.0
     
-    # Liquidity quality: from sweep count
-    liquidity_quality = min(1.0, len(liquidity.sweeps) / 3) if liquidity.sweeps else 0.0
+    # Liquidity quality: compact vector-friendly proxy from available context flags.
+    liquidity_events = sum(
+        int(flag)
+        for flag in (
+            liquidity.sweep,
+            liquidity.displacement,
+            liquidity.equal_highs,
+            liquidity.equal_lows,
+        )
+    )
+    liquidity_quality = min(1.0, liquidity_events / 4.0)
     
     # Trigger confidence: event presence
     trigger_confidence = 1.0 if trigger and trigger.structure_event else 0.0

@@ -6,7 +6,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from smc.zones import PriceZone, assess_zone_lifecycle
+from smc.zones import PriceZone, assess_zone_lifecycle_as_of
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ def evaluate_mitigation(
             summary="Empty frame",
         )
 
-    lifecycle = assess_zone_lifecycle(frame, zone)
+    lifecycle = assess_zone_lifecycle_as_of(frame, zone, as_of_index=len(frame) - 1)
     if lifecycle.touch_count == 0 or lifecycle.last_touch_index is None:
         return MitigationState(
             zone=lifecycle,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
@@ -120,6 +120,9 @@ class SignalEngine:
         regime_long_window: int = 80,
         enable_shadow_scoring: bool = True,
         enable_mitigation_entry: bool = True,
+        enable_order_block_shadow: bool = True,
+        order_block_shadow_backtest_only: bool = False,
+        allow_live_order_block_shadow: bool = True,
         currency_exposure_cap: int = 2,
         pair_cooldown_minutes: int = 30,
         max_entries_per_bias: int = 2,
@@ -128,6 +131,13 @@ class SignalEngine:
         contraction_min_trigger_strength: int = 9,
         range_min_trigger_strength: int = 8,
         require_displacement_in_contraction: bool = True,
+        enable_strict_ltf_direction_gate: bool = False,
+        enable_market_fallback_entry: bool = True,
+        market_fallback_min_trigger_strength: int = 0,
+        market_fallback_require_displacement: bool = False,
+        enable_pip_aware_liquidity: bool = False,
+        liquidity_equal_level_tolerance_pips: float = 3.0,
+        liquidity_atr_tolerance_factor: float = 0.0,
         session_min_score: int = 5,
         enable_session_gate: bool = False,
         session_gate_windows_utc: tuple[tuple[int, int], ...] | list[tuple[int, int]] | None = None,
@@ -138,6 +148,8 @@ class SignalEngine:
         regime_gate_backtest_only: bool = True,
         allow_live_regime_gate: bool = False,
         enable_smt_confirmation: bool = True,
+        smt_backtest_only: bool = False,
+        allow_live_smt_confirmation: bool = True,
         smt_hard_gate: bool = False,
         smt_min_strength: float = 60.0,
         smt_opposite_block_strength: float = 80.0,
@@ -172,6 +184,7 @@ class SignalEngine:
         dynamic_threshold_backtest_only: bool = True,
         allow_live_dynamic_threshold: bool = False,
         enable_structure_quality_scoring: bool = False,
+        structure_quality_replaces_raw_structure_score: bool = False,
         structure_quality_scan_bars: int = 300,
         structure_quality_min_break_pips: float = 2.0,
         structure_quality_level_bucket_pips: float = 2.0,
@@ -200,6 +213,7 @@ class SignalEngine:
         self.htf_timeframe = htf_timeframe
         self.ltf_timeframe = ltf_timeframe
         self.trigger_timeframe = trigger_timeframe
+        self.runtime_mode = runtime_mode.lower().strip()
         self.min_score = min_score
         self.risk_reward = risk_reward
         self.swing_window = swing_window
@@ -215,6 +229,13 @@ class SignalEngine:
         self.contraction_min_trigger_strength = max(0, min(20, contraction_min_trigger_strength))
         self.range_min_trigger_strength = max(0, min(20, range_min_trigger_strength))
         self.require_displacement_in_contraction = require_displacement_in_contraction
+        self.enable_strict_ltf_direction_gate = bool(enable_strict_ltf_direction_gate)
+        self.enable_market_fallback_entry = bool(enable_market_fallback_entry)
+        self.market_fallback_min_trigger_strength = max(0, min(20, int(market_fallback_min_trigger_strength)))
+        self.market_fallback_require_displacement = bool(market_fallback_require_displacement)
+        self.enable_pip_aware_liquidity = bool(enable_pip_aware_liquidity)
+        self.liquidity_equal_level_tolerance_pips = max(0.0, float(liquidity_equal_level_tolerance_pips))
+        self.liquidity_atr_tolerance_factor = max(0.0, float(liquidity_atr_tolerance_factor))
         self.session_min_score = max(0, min(20, session_min_score))
         self._session_gate = SessionGate(
             SessionGateSettings(
@@ -247,7 +268,12 @@ class SignalEngine:
             for pair, profile in self._pair_profiles.items()
             if profile.regime_gate_settings is not None
         }
-        self.enable_smt_confirmation = enable_smt_confirmation
+        self.enable_smt_confirmation = self._feature_enabled_for_runtime(
+            enabled=enable_smt_confirmation,
+            backtest_only=smt_backtest_only,
+            allow_live=allow_live_smt_confirmation,
+            runtime_mode=self.runtime_mode,
+        )
         self.smt_hard_gate = smt_hard_gate
         self.smt_min_strength = max(0.0, min(100.0, smt_min_strength))
         self.smt_opposite_block_strength = max(0.0, min(100.0, smt_opposite_block_strength))
@@ -260,10 +286,15 @@ class SignalEngine:
         self.trailing_start_r = max(0.0, trailing_start_r)
         self.trailing_lookback_bars = max(1, trailing_lookback_bars)
         self.time_stop_bars = max(0, time_stop_bars)
+        self.enable_order_block_shadow = self._feature_enabled_for_runtime(
+            enabled=enable_order_block_shadow,
+            backtest_only=order_block_shadow_backtest_only,
+            allow_live=allow_live_order_block_shadow,
+            runtime_mode=self.runtime_mode,
+        )
         self.portfolio_currency_gross_cap = max(0, portfolio_currency_gross_cap)
         self.portfolio_currency_net_cap = max(0, portfolio_currency_net_cap)
         self.portfolio_exposure_window_minutes = max(1, portfolio_exposure_window_minutes)
-        self.runtime_mode = runtime_mode.lower().strip()
         self.enable_market_data_freshness_gate = bool(enable_market_data_freshness_gate)
         self.max_live_candle_age_seconds = max(1, int(max_live_candle_age_seconds))
         self.enable_adaptive_weights = enable_adaptive_weights
@@ -293,6 +324,7 @@ class SignalEngine:
             )
         )
         self._last_recommended_threshold: int | None = None
+        self.structure_quality_replaces_raw_structure_score = bool(structure_quality_replaces_raw_structure_score)
         self._structure_quality_settings = StructureQualitySettings(
             enabled=enable_structure_quality_scoring,
             scan_bars=structure_quality_scan_bars,
@@ -341,6 +373,20 @@ class SignalEngine:
         self._pair_cooldown_until: dict[str, datetime] = {}
         self._bias_history: dict[tuple[str, str], list[datetime]] = {}
         self._currency_exposure_records: list[CurrencyExposureRecord] = []
+
+    @staticmethod
+    def _feature_enabled_for_runtime(
+        *,
+        enabled: bool,
+        backtest_only: bool,
+        allow_live: bool,
+        runtime_mode: str,
+    ) -> bool:
+        if not enabled:
+            return False
+        if not backtest_only:
+            return True
+        return runtime_mode.lower().strip() == "backtest" or bool(allow_live)
 
     @staticmethod
     def _log_rejection(pair: str, stage: str, rejection_reason: str, **context: object) -> None:
@@ -414,6 +460,101 @@ class SignalEngine:
             return side, "htf"
 
         return None, source
+
+    def _check_ltf_direction_gate(
+        self,
+        *,
+        side: str,
+        source: str,
+        structure: StructureState,
+        trigger: TriggerContext,
+        liquidity: LiquidityContext,
+    ) -> tuple[bool, dict[str, object]]:
+        side_dir = self._side_direction(side)
+        aligned = {
+            "trigger_direction": trigger.direction == side_dir,
+            "structure_direction": structure.direction == side_dir,
+            "liquidity_sweep": liquidity.sweep_direction == side_dir,
+            "liquidity_displacement": liquidity.displacement_direction == side_dir,
+        }
+        context = {
+            "enabled": self.enable_strict_ltf_direction_gate,
+            "side": side,
+            "source": source,
+            "trigger_direction": trigger.direction.upper(),
+            "structure_direction": (structure.direction or "none").upper(),
+            "liquidity_sweep_direction": (liquidity.sweep_direction or "none").upper(),
+            "liquidity_displacement_direction": (liquidity.displacement_direction or "none").upper(),
+            "aligned": aligned,
+        }
+        if not self.enable_strict_ltf_direction_gate:
+            return True, context
+        if source in {"trigger", "structure"}:
+            return True, context
+        if any(aligned.values()):
+            return True, context
+        return False, context
+
+    def _market_fallback_settings(self, pair_profile: PairRuntimeProfile | None) -> dict[str, object]:
+        allow = self.enable_market_fallback_entry
+        min_strength = self.market_fallback_min_trigger_strength
+        require_displacement = self.market_fallback_require_displacement
+        if pair_profile is not None:
+            if pair_profile.allow_market_fallback is not None:
+                allow = bool(pair_profile.allow_market_fallback)
+            if pair_profile.market_fallback_min_trigger_strength is not None:
+                min_strength = int(pair_profile.market_fallback_min_trigger_strength)
+            if pair_profile.market_fallback_require_displacement is not None:
+                require_displacement = bool(pair_profile.market_fallback_require_displacement)
+        return {
+            "allow": bool(allow),
+            "min_trigger_strength": max(0, min(20, int(min_strength))),
+            "require_displacement": bool(require_displacement),
+        }
+
+    def _market_fallback_allowed(
+        self,
+        *,
+        side: str,
+        trigger: TriggerContext,
+        liquidity: LiquidityContext,
+        pair_profile: PairRuntimeProfile | None,
+    ) -> tuple[bool, dict[str, object]]:
+        settings = self._market_fallback_settings(pair_profile)
+        side_dir = self._side_direction(side)
+        has_aligned_displacement = (
+            trigger.liquidity.displacement_direction == side_dir
+            or liquidity.displacement_direction == side_dir
+        )
+        allowed = bool(settings["allow"])
+        reason = "allowed"
+        if not allowed:
+            reason = "market fallback disabled"
+        elif trigger.strength < int(settings["min_trigger_strength"]):
+            allowed = False
+            reason = "trigger strength below market fallback threshold"
+        elif bool(settings["require_displacement"]) and not has_aligned_displacement:
+            allowed = False
+            reason = "aligned displacement required for market fallback"
+        return allowed, {
+            **settings,
+            "reason": reason,
+            "trigger_strength": trigger.strength,
+            "has_aligned_displacement": has_aligned_displacement,
+        }
+
+    def _trigger_for_scoring(self, trigger: TriggerContext, structure_quality_enabled: bool) -> TriggerContext:
+        if not self.structure_quality_replaces_raw_structure_score or not structure_quality_enabled:
+            return trigger
+        if trigger.structure_event is None:
+            return trigger
+        adjusted_strength = max(0, trigger.strength - 8)
+        return replace(
+            trigger,
+            structure_event=None,
+            structure_trend="NEUTRAL",
+            strength=adjusted_strength,
+        )
 
     def _fetch_frames(self, pair: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         htf = self.market_data.fetch_ohlcv(pair, self.htf_timeframe)
@@ -980,8 +1121,16 @@ class SignalEngine:
                 news_assessment=news_assessment,
             )
 
+        liquidity_tolerance_pips = self.liquidity_equal_level_tolerance_pips if self.enable_pip_aware_liquidity else None
+        liquidity_atr_factor = self.liquidity_atr_tolerance_factor if self.enable_pip_aware_liquidity else 0.0
         structure = detect_bos_choch(ltf, window=self.swing_window)
-        liquidity: LiquidityContext = analyze_liquidity(ltf, swing_window=self.swing_window)
+        liquidity: LiquidityContext = analyze_liquidity(
+            ltf,
+            swing_window=self.swing_window,
+            pair=pair if self.enable_pip_aware_liquidity else None,
+            tolerance_pips=liquidity_tolerance_pips,
+            atr_tolerance_factor=liquidity_atr_factor,
+        )
         current_price = float(trigger_frame["close"].iloc[-1])
         mtf: MTFContext = premium_discount_context(
             htf,
@@ -1038,6 +1187,9 @@ class SignalEngine:
         trigger: TriggerContext = analyze_trigger(
             trigger_frame,
             swing_window=max(2, self.swing_window - 1),
+            pair=pair if self.enable_pip_aware_liquidity else None,
+            liquidity_tolerance_pips=liquidity_tolerance_pips,
+            liquidity_atr_tolerance_factor=liquidity_atr_factor,
         )
         regime_direction = regime.direction.upper()
 
@@ -1057,6 +1209,32 @@ class SignalEngine:
                 signal=None,
                 rejection_stage="direction",
                 rejection_reason="no directional confluence",
+                details=details,
+                score_breakdown=None,
+                news_assessment=news_assessment,
+                regime_label=regime_label,
+            )
+
+        ltf_gate_allowed, ltf_gate_context = self._check_ltf_direction_gate(
+            side=side,
+            source=source,
+            structure=structure,
+            trigger=trigger,
+            liquidity=liquidity,
+        )
+        if not ltf_gate_allowed:
+            details = {
+                "regime_label": regime_label,
+                "regime_direction": regime_direction,
+                **ltf_gate_context,
+            }
+            if emit_logs:
+                self._log_rejection(pair, "direction_gate", "strict LTF direction gate blocked", **details)
+            return SignalEvaluation(
+                accepted=False,
+                signal=None,
+                rejection_stage="direction_gate",
+                rejection_reason="strict LTF direction gate blocked",
                 details=details,
                 score_breakdown=None,
                 news_assessment=news_assessment,
@@ -1098,6 +1276,7 @@ class SignalEngine:
                 trigger_frame=trigger_frame,
                 reference_pair=reference_pair if self.enable_smt_confirmation else None,
                 reference_frame=reference_trigger_frame if self.enable_smt_confirmation else None,
+                include_order_block=self.enable_order_block_shadow,
             )
 
         structure_quality = evaluate_structure_quality(
@@ -1109,6 +1288,12 @@ class SignalEngine:
             settings=self._structure_quality_settings,
             runtime_mode=self.runtime_mode,
             regime_label=regime_label,
+        )
+        scoring_trigger = self._trigger_for_scoring(trigger, structure_quality.enabled)
+        structure_score_mode = (
+            "structure_quality_soft"
+            if scoring_trigger is not trigger
+            else "raw_structure_trigger"
         )
 
         news = news_assessment or self.news_filter.evaluate_pair(pair)
@@ -1146,7 +1331,7 @@ class SignalEngine:
             zone=mtf.zone,
             liquidity=liquidity,
             regime=regime,
-            trigger=trigger,
+            trigger=scoring_trigger,
             news=news,
             signal_time=signal_time,
             shadow=shadow,
@@ -1202,6 +1387,7 @@ class SignalEngine:
                 "adaptive_weights": score_meta.get("adaptive_weights"),
                 "normalization": normalization_meta,
                 "structure_quality": structure_quality.to_dict(),
+                "structure_score_mode": structure_score_mode,
                 "shadow": {
                     "fvg": score.fvg_alignment,
                     "order_block": score.order_block_alignment,
@@ -1288,6 +1474,12 @@ class SignalEngine:
             fallback_rr=self.risk_reward,
             volatility_ratio=self._volatility_ratio(trigger_frame),
         )
+        market_fallback_allowed, market_fallback_context = self._market_fallback_allowed(
+            side=side,
+            trigger=trigger,
+            liquidity=liquidity,
+            pair_profile=pair_profile,
+        )
         entry_plan: EntryPlan | None = build_entry_plan(
             side=side,
             current_price=current_price,
@@ -1295,6 +1487,7 @@ class SignalEngine:
             risk_reward=live_profile_plan.target_rr,
             shadow=shadow,
             enable_mitigation_entry=self.enable_mitigation_entry,
+            allow_market_fallback=market_fallback_allowed,
         )
         if entry_plan is None:
             details = {
@@ -1302,14 +1495,15 @@ class SignalEngine:
                 "entry": round(current_price, 5),
                 "regime_label": regime_label,
                 "regime_direction": regime_direction,
+                "market_fallback": market_fallback_context,
             }
             if emit_logs:
-                self._log_rejection(pair, "risk", "unable to build SL/TP", **details)
+                self._log_rejection(pair, "entry", "unable to build entry plan", **details)
             return SignalEvaluation(
                 accepted=False,
                 signal=None,
-                rejection_stage="risk",
-                rejection_reason="unable to build SL/TP",
+                rejection_stage="entry",
+                rejection_reason="unable to build entry plan",
                 details=details,
                 score_breakdown=score,
                 news_assessment=news,
@@ -1354,6 +1548,7 @@ class SignalEngine:
                 "score_breakdown_weighted": score_meta.get("weighted_components", {}),
                 "adaptive_weights": score_meta.get("adaptive_weights", {}),
                 "structure_quality": structure_quality.to_dict(),
+                "structure_score_mode": structure_score_mode,
                 "score_normalization": normalization_meta,
                 "score_raw_total": score_meta.get("raw_total"),
                 "score_weighted_total": score_meta.get("weighted_total"),
@@ -1370,6 +1565,22 @@ class SignalEngine:
                 },
                 "live_profile": live_profile_plan.to_dict(),
                 "pair_profile": pair_profile_meta,
+                "ltf_direction_gate": ltf_gate_context,
+                "market_fallback": market_fallback_context,
+                "liquidity_tolerance": {
+                    "pip_aware_enabled": self.enable_pip_aware_liquidity,
+                    "mode": liquidity.equal_level_tolerance_mode,
+                    "price": liquidity.equal_level_tolerance_price,
+                    "pips": self.liquidity_equal_level_tolerance_pips,
+                    "atr_factor": self.liquidity_atr_tolerance_factor,
+                },
+                "structure_confirmation": {
+                    "last_swing_high_index": structure.last_swing_high_index,
+                    "last_swing_low_index": structure.last_swing_low_index,
+                    "last_swing_high_confirmed_at_index": structure.last_swing_high_confirmed_at_index,
+                    "last_swing_low_confirmed_at_index": structure.last_swing_low_confirmed_at_index,
+                    "event_confirmed_at_index": structure.event_confirmed_at_index,
+                },
             },
         )
         first_partial = live_profile_plan.first_partial()
@@ -1461,7 +1672,24 @@ class SignalEngine:
                 "adaptive_weights": score_meta.get("adaptive_weights"),
                 "score_normalization": normalization_meta,
                 "pair_profile": pair_profile_meta,
+                "ltf_direction_gate": ltf_gate_context,
+                "market_fallback": market_fallback_context,
+                "liquidity_tolerance": {
+                    "pip_aware_enabled": self.enable_pip_aware_liquidity,
+                    "mode": liquidity.equal_level_tolerance_mode,
+                    "price": liquidity.equal_level_tolerance_price,
+                    "pips": self.liquidity_equal_level_tolerance_pips,
+                    "atr_factor": self.liquidity_atr_tolerance_factor,
+                },
+                "structure_confirmation": {
+                    "last_swing_high_index": structure.last_swing_high_index,
+                    "last_swing_low_index": structure.last_swing_low_index,
+                    "last_swing_high_confirmed_at_index": structure.last_swing_high_confirmed_at_index,
+                    "last_swing_low_confirmed_at_index": structure.last_swing_low_confirmed_at_index,
+                    "event_confirmed_at_index": structure.event_confirmed_at_index,
+                },
                 "structure_quality": structure_quality.to_dict(),
+                "structure_score_mode": structure_score_mode,
                 "entry": {
                     "mode": entry_plan.mode,
                     "source": entry_plan.source,

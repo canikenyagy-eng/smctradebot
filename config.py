@@ -270,6 +270,13 @@ class Settings:
     contraction_min_trigger_strength: int
     range_min_trigger_strength: int
     require_displacement_in_contraction: bool
+    enable_strict_ltf_direction_gate: bool
+    enable_market_fallback_entry: bool
+    market_fallback_min_trigger_strength: int
+    market_fallback_require_displacement: bool
+    enable_pip_aware_liquidity: bool
+    liquidity_equal_level_tolerance_pips: float
+    liquidity_atr_tolerance_factor: float
     session_min_score: int
     enable_session_gate: bool
     session_gate_windows_utc: List[tuple[int, int]]
@@ -280,6 +287,8 @@ class Settings:
     regime_gate_backtest_only: bool
     allow_live_regime_gate: bool
     enable_smt_confirmation: bool
+    smt_backtest_only: bool
+    allow_live_smt_confirmation: bool
     smt_hard_gate: bool
     smt_min_strength: float
     smt_opposite_block_strength: float
@@ -305,6 +314,9 @@ class Settings:
     news_blackout_after_minutes: int
     news_surprise_threshold: float
     enable_mitigation_entry: bool
+    enable_order_block_shadow: bool
+    order_block_shadow_backtest_only: bool
+    allow_live_order_block_shadow: bool
     export_reports: bool
     export_regime_report: bool
     enable_adaptive_weights: bool
@@ -383,6 +395,7 @@ class Settings:
     smc_relaxed_fvg_min_gap_pips: float
     smc_relaxed_fvg_max_distance_pips: float
     enable_structure_quality_scoring: bool
+    structure_quality_replaces_raw_structure_score: bool
     structure_quality_min_score_for_bonus: float
     structure_quality_max_bonus: int
     structure_quality_backtest_only: bool
@@ -531,6 +544,31 @@ class Settings:
                 os.getenv("REQUIRE_DISPLACEMENT_IN_CONTRACTION", "1"),
                 default=True,
             ),
+            enable_strict_ltf_direction_gate=_parse_bool(
+                os.getenv("ENABLE_STRICT_LTF_DIRECTION_GATE", "0"),
+                default=False,
+            ),
+            enable_market_fallback_entry=_parse_bool(
+                os.getenv("ENABLE_MARKET_FALLBACK_ENTRY", "1"),
+                default=True,
+            ),
+            market_fallback_min_trigger_strength=max(
+                0,
+                min(20, int(os.getenv("MARKET_FALLBACK_MIN_TRIGGER_STRENGTH", "0"))),
+            ),
+            market_fallback_require_displacement=_parse_bool(
+                os.getenv("MARKET_FALLBACK_REQUIRE_DISPLACEMENT", "0"),
+                default=False,
+            ),
+            enable_pip_aware_liquidity=_parse_bool(os.getenv("ENABLE_PIP_AWARE_LIQUIDITY", "0"), default=False),
+            liquidity_equal_level_tolerance_pips=max(
+                0.0,
+                float(os.getenv("LIQUIDITY_EQUAL_LEVEL_TOLERANCE_PIPS", "3.0")),
+            ),
+            liquidity_atr_tolerance_factor=max(
+                0.0,
+                float(os.getenv("LIQUIDITY_ATR_TOLERANCE_FACTOR", "0.0")),
+            ),
             session_min_score=max(0, min(20, int(os.getenv("SESSION_MIN_SCORE", "5")))),
             enable_session_gate=_parse_bool(os.getenv("ENABLE_SESSION_GATE", "0"), default=False),
             session_gate_windows_utc=_parse_session_windows(os.getenv("SESSION_GATE_WINDOWS_UTC", "")),
@@ -541,6 +579,8 @@ class Settings:
             regime_gate_backtest_only=_parse_bool(os.getenv("REGIME_GATE_BACKTEST_ONLY", "1"), default=True),
             allow_live_regime_gate=_parse_bool(os.getenv("ALLOW_LIVE_REGIME_GATE", "0"), default=False),
             enable_smt_confirmation=_parse_bool(os.getenv("ENABLE_SMT_CONFIRMATION", "1"), default=True),
+            smt_backtest_only=_parse_bool(os.getenv("SMT_BACKTEST_ONLY", "0"), default=False),
+            allow_live_smt_confirmation=_parse_bool(os.getenv("ALLOW_LIVE_SMT_CONFIRMATION", "1"), default=True),
             smt_hard_gate=_parse_bool(os.getenv("SMT_HARD_GATE", "0"), default=False),
             smt_min_strength=max(0.0, min(100.0, float(os.getenv("SMT_MIN_STRENGTH", "60")))),
             smt_opposite_block_strength=max(0.0, min(100.0, float(os.getenv("SMT_OPPOSITE_BLOCK_STRENGTH", "80")))),
@@ -571,6 +611,15 @@ class Settings:
             news_blackout_after_minutes=max(0, int(os.getenv("NEWS_BLACKOUT_AFTER_MIN", "30"))),
             news_surprise_threshold=max(0.0, float(os.getenv("NEWS_SURPRISE_THRESHOLD", "0.50"))),
             enable_mitigation_entry=_parse_bool(os.getenv("ENABLE_MITIGATION_ENTRY", "1"), default=True),
+            enable_order_block_shadow=_parse_bool(os.getenv("ENABLE_ORDER_BLOCK_SHADOW", "1"), default=True),
+            order_block_shadow_backtest_only=_parse_bool(
+                os.getenv("ORDER_BLOCK_SHADOW_BACKTEST_ONLY", "0"),
+                default=False,
+            ),
+            allow_live_order_block_shadow=_parse_bool(
+                os.getenv("ALLOW_LIVE_ORDER_BLOCK_SHADOW", "1"),
+                default=True,
+            ),
             export_reports=_parse_bool(os.getenv("EXPORT_REPORTS", "1"), default=True),
             export_regime_report=_parse_bool(os.getenv("EXPORT_REGIME_REPORT", "0"), default=False),
             enable_adaptive_weights=_parse_bool(os.getenv("ENABLE_ADAPTIVE_WEIGHTS", "0"), default=False),
@@ -648,6 +697,10 @@ class Settings:
             smc_relaxed_fvg_min_gap_pips=max(0.0, float(os.getenv("SMC_RELAXED_FVG_MIN_GAP_PIPS", "0.1"))),
             smc_relaxed_fvg_max_distance_pips=max(0.1, float(os.getenv("SMC_RELAXED_FVG_MAX_DISTANCE_PIPS", "30.0"))),
             enable_structure_quality_scoring=_parse_bool(os.getenv("ENABLE_STRUCTURE_QUALITY_SCORING", "0"), default=False),
+            structure_quality_replaces_raw_structure_score=_parse_bool(
+                os.getenv("STRUCTURE_QUALITY_REPLACES_RAW_STRUCTURE_SCORE", "0"),
+                default=False,
+            ),
             structure_quality_min_score_for_bonus=max(
                 0.0,
                 min(100.0, float(os.getenv("STRUCTURE_QUALITY_MIN_SCORE_FOR_BONUS", "60.0"))),

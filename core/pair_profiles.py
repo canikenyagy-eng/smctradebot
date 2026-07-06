@@ -31,6 +31,19 @@ def _as_optional_int(value: object) -> int | None:
         return None
 
 
+def _as_optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _as_regimes(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -95,11 +108,19 @@ class PairRuntimeProfile:
     evaluation_step: int | None = None
     session_gate_settings: SessionGateSettings | None = None
     regime_gate_settings: RegimeGateSettings | None = None
+    allow_market_fallback: bool | None = None
+    market_fallback_min_trigger_strength: int | None = None
+    market_fallback_require_displacement: bool | None = None
     description: str = ""
 
     def sanitized(self) -> "PairRuntimeProfile":
         min_score = None if self.min_score is None else max(0, min(100, int(self.min_score)))
         evaluation_step = None if self.evaluation_step is None else max(1, int(self.evaluation_step))
+        fallback_min_strength = (
+            None
+            if self.market_fallback_min_trigger_strength is None
+            else max(0, min(20, int(self.market_fallback_min_trigger_strength)))
+        )
         return PairRuntimeProfile(
             pair=clean_pair(self.pair),
             min_score=min_score,
@@ -110,6 +131,9 @@ class PairRuntimeProfile:
             regime_gate_settings=self.regime_gate_settings.sanitized()
             if self.regime_gate_settings is not None
             else None,
+            allow_market_fallback=self.allow_market_fallback,
+            market_fallback_min_trigger_strength=fallback_min_strength,
+            market_fallback_require_displacement=self.market_fallback_require_displacement,
             description=str(self.description or "").strip(),
         )
 
@@ -124,6 +148,9 @@ class PairRuntimeProfile:
             "regime_gate": self.regime_gate_settings.to_dict()
             if self.regime_gate_settings is not None
             else None,
+            "allow_market_fallback": self.allow_market_fallback,
+            "market_fallback_min_trigger_strength": self.market_fallback_min_trigger_strength,
+            "market_fallback_require_displacement": self.market_fallback_require_displacement,
             "description": self.description,
         }
 
@@ -196,6 +223,21 @@ def build_pair_runtime_profiles(
             evaluation_step=evaluation_step,
             session_gate_settings=session_gate_settings,
             regime_gate_settings=regime_gate_settings,
+            allow_market_fallback=_as_optional_bool(
+                raw_value.get("allow_market_fallback", raw_value.get("enable_market_fallback_entry"))
+            ),
+            market_fallback_min_trigger_strength=_as_optional_int(
+                raw_value.get(
+                    "market_fallback_min_trigger_strength",
+                    raw_value.get("fallback_min_trigger_strength"),
+                )
+            ),
+            market_fallback_require_displacement=_as_optional_bool(
+                raw_value.get(
+                    "market_fallback_require_displacement",
+                    raw_value.get("fallback_require_displacement"),
+                )
+            ),
             description=str(raw_value.get("description", "") or "").strip(),
         ).sanitized()
         if (
@@ -203,6 +245,9 @@ def build_pair_runtime_profiles(
             and profile.evaluation_step is None
             and profile.session_gate_settings is None
             and profile.regime_gate_settings is None
+            and profile.allow_market_fallback is None
+            and profile.market_fallback_min_trigger_strength is None
+            and profile.market_fallback_require_displacement is None
         ):
             continue
         profiles[pair] = profile

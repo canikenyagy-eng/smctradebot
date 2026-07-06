@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from smc.zones import PriceZone, assess_zone_lifecycle
+from smc.zones import PriceZone, assess_zone_lifecycle_as_of
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ def detect_fvg_zones(
                 source_index=mid_index,
                 strength=_gap_strength(gap_size, avg_range, abs(mid_close - mid_open)),
             )
-            zones.append(assess_zone_lifecycle(frame, zone, start_index=next_index))
+            zones.append(assess_zone_lifecycle_as_of(frame, zone, start_index=next_index, as_of_index=len(frame) - 1))
             continue
 
         bearish_gap = next_high < prev_low and mid_close <= mid_open
@@ -116,7 +116,7 @@ def detect_fvg_zones(
                 source_index=mid_index,
                 strength=_gap_strength(gap_size, avg_range, abs(mid_close - mid_open)),
             )
-            zones.append(assess_zone_lifecycle(frame, zone, start_index=next_index))
+            zones.append(assess_zone_lifecycle_as_of(frame, zone, start_index=next_index, as_of_index=len(frame) - 1))
 
     return sorted(zones, key=lambda item: (item.created_index or -1, item.strength), reverse=True)
 

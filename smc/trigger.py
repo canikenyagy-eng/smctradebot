@@ -35,7 +35,14 @@ def _resolve_direction(structure: StructureState, liquidity: LiquidityContext) -
     return "neutral"
 
 
-def analyze_trigger(frame: pd.DataFrame, swing_window: int = 2) -> TriggerContext:
+def analyze_trigger(
+    frame: pd.DataFrame,
+    swing_window: int = 2,
+    *,
+    pair: str | None = None,
+    liquidity_tolerance_pips: float | None = None,
+    liquidity_atr_tolerance_factor: float = 0.0,
+) -> TriggerContext:
     if frame.empty:
         return TriggerContext(
             direction="neutral",
@@ -55,7 +62,13 @@ def analyze_trigger(frame: pd.DataFrame, swing_window: int = 2) -> TriggerContex
         )
 
     structure = detect_bos_choch(frame, window=max(2, swing_window))
-    liquidity = analyze_liquidity(frame, swing_window=max(2, swing_window))
+    liquidity = analyze_liquidity(
+        frame,
+        swing_window=max(2, swing_window),
+        pair=pair,
+        tolerance_pips=liquidity_tolerance_pips,
+        atr_tolerance_factor=liquidity_atr_tolerance_factor,
+    )
     direction = _resolve_direction(structure, liquidity)
 
     strength = 0

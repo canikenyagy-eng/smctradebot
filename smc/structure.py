@@ -13,6 +13,11 @@ class StructureState:
     direction: str | None
     last_swing_high: float | None
     last_swing_low: float | None
+    last_swing_high_index: int | None = None
+    last_swing_low_index: int | None = None
+    last_swing_high_confirmed_at_index: int | None = None
+    last_swing_low_confirmed_at_index: int | None = None
+    event_confirmed_at_index: int | None = None
 
 
 def identify_swings(frame: pd.DataFrame, window: int = 3) -> pd.DataFrame:
@@ -23,11 +28,15 @@ def identify_swings(frame: pd.DataFrame, window: int = 3) -> pd.DataFrame:
         out = frame.copy()
         out["swing_high"] = False
         out["swing_low"] = False
+        out["swing_high_confirmed_at_index"] = pd.NA
+        out["swing_low_confirmed_at_index"] = pd.NA
         return out
 
     out = frame.copy()
     out["swing_high"] = False
     out["swing_low"] = False
+    out["swing_high_confirmed_at_index"] = pd.NA
+    out["swing_low_confirmed_at_index"] = pd.NA
 
     for idx in range(window, len(out) - window):
         high_slice = out["high"].iloc[idx - window : idx + window + 1]
@@ -35,9 +44,11 @@ def identify_swings(frame: pd.DataFrame, window: int = 3) -> pd.DataFrame:
 
         if out["high"].iloc[idx] == high_slice.max():
             out.iloc[idx, out.columns.get_loc("swing_high")] = True
+            out.iloc[idx, out.columns.get_loc("swing_high_confirmed_at_index")] = idx + window
 
         if out["low"].iloc[idx] == low_slice.min():
             out.iloc[idx, out.columns.get_loc("swing_low")] = True
+            out.iloc[idx, out.columns.get_loc("swing_low_confirmed_at_index")] = idx + window
 
     return out
 
@@ -71,8 +82,10 @@ def detect_bos_choch(frame: pd.DataFrame, window: int = 3) -> StructureState:
     swings_frame = identify_swings(frame, window=window)
     trend = infer_trend(swings_frame)
 
-    recent_highs = swings_frame.loc[swings_frame["swing_high"], "high"]
-    recent_lows = swings_frame.loc[swings_frame["swing_low"], "low"]
+    high_mask = swings_frame["swing_high"].astype(bool)
+    low_mask = swings_frame["swing_low"].astype(bool)
+    recent_highs = swings_frame.loc[high_mask, "high"]
+    recent_lows = swings_frame.loc[low_mask, "low"]
 
     if recent_highs.empty or recent_lows.empty:
         return StructureState(
@@ -83,9 +96,24 @@ def detect_bos_choch(frame: pd.DataFrame, window: int = 3) -> StructureState:
             last_swing_low=None,
         )
 
+    high_positions = [int(pos) for pos, is_swing in enumerate(high_mask) if bool(is_swing)]
+    low_positions = [int(pos) for pos, is_swing in enumerate(low_mask) if bool(is_swing)]
+    last_high_index = high_positions[-1] if high_positions else None
+    last_low_index = low_positions[-1] if low_positions else None
     last_swing_high = float(recent_highs.iloc[-1])
     last_swing_low = float(recent_lows.iloc[-1])
     last_close = float(frame["close"].iloc[-1])
+    last_high_confirmed = (
+        int(swings_frame["swing_high_confirmed_at_index"].iloc[last_high_index])
+        if last_high_index is not None and pd.notna(swings_frame["swing_high_confirmed_at_index"].iloc[last_high_index])
+        else None
+    )
+    last_low_confirmed = (
+        int(swings_frame["swing_low_confirmed_at_index"].iloc[last_low_index])
+        if last_low_index is not None and pd.notna(swings_frame["swing_low_confirmed_at_index"].iloc[last_low_index])
+        else None
+    )
+    event_confirmed = len(frame) - 1
 
     if last_close > last_swing_high:
         event = "BOS" if trend in {"bullish", "neutral"} else "CHoCH"
@@ -95,6 +123,11 @@ def detect_bos_choch(frame: pd.DataFrame, window: int = 3) -> StructureState:
             direction="bullish",
             last_swing_high=last_swing_high,
             last_swing_low=last_swing_low,
+            last_swing_high_index=last_high_index,
+            last_swing_low_index=last_low_index,
+            last_swing_high_confirmed_at_index=last_high_confirmed,
+            last_swing_low_confirmed_at_index=last_low_confirmed,
+            event_confirmed_at_index=event_confirmed,
         )
 
     if last_close < last_swing_low:
@@ -105,6 +138,11 @@ def detect_bos_choch(frame: pd.DataFrame, window: int = 3) -> StructureState:
             direction="bearish",
             last_swing_high=last_swing_high,
             last_swing_low=last_swing_low,
+            last_swing_high_index=last_high_index,
+            last_swing_low_index=last_low_index,
+            last_swing_high_confirmed_at_index=last_high_confirmed,
+            last_swing_low_confirmed_at_index=last_low_confirmed,
+            event_confirmed_at_index=event_confirmed,
         )
 
     return StructureState(
@@ -113,4 +151,9 @@ def detect_bos_choch(frame: pd.DataFrame, window: int = 3) -> StructureState:
         direction=None,
         last_swing_high=last_swing_high,
         last_swing_low=last_swing_low,
+        last_swing_high_index=last_high_index,
+        last_swing_low_index=last_low_index,
+        last_swing_high_confirmed_at_index=last_high_confirmed,
+        last_swing_low_confirmed_at_index=last_low_confirmed,
+        event_confirmed_at_index=None,
     )

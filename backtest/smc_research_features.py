@@ -10,7 +10,7 @@ from smc.fvg import detect_fvg_zones
 from smc.order_block import detect_order_blocks
 from smc.structure import detect_bos_choch
 from smc.structure_quality import StructureQualitySettings, evaluate_structure_quality
-from smc.zones import PriceZone, assess_zone_lifecycle
+from smc.zones import PriceZone, assess_zone_lifecycle_as_of
 
 
 def pip_size(pair: str) -> float:
@@ -268,7 +268,7 @@ def detect_relaxed_fvg_zones(
                 source_index=mid_idx,
                 strength=strength,
             )
-            zones.append(assess_zone_lifecycle(frame, zone, start_index=next_idx))
+            zones.append(assess_zone_lifecycle_as_of(frame, zone, start_index=next_idx, as_of_index=len(frame) - 1))
 
         if next_high < prev_low and (prev_low - next_high) >= min_gap:
             strength = min(1.0, ((prev_low - next_high) / max(avg_range, min_gap, 1e-9)) * 0.65 + (body / max(avg_range, 1e-9)) * 0.35)
@@ -282,7 +282,7 @@ def detect_relaxed_fvg_zones(
                 source_index=mid_idx,
                 strength=strength,
             )
-            zones.append(assess_zone_lifecycle(frame, zone, start_index=next_idx))
+            zones.append(assess_zone_lifecycle_as_of(frame, zone, start_index=next_idx, as_of_index=len(frame) - 1))
 
     return sorted(zones, key=lambda item: (item.created_index or -1, item.strength), reverse=True)
 
