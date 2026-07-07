@@ -239,6 +239,7 @@ class Settings:
     wf_test_months: int
     wf_step_months: int
     enable_realistic_execution: bool
+    skip_realistic_comparison: bool
     spread_default_pips: float
     spread_by_pair: dict[str, float]
     slippage_mode: str
@@ -510,6 +511,7 @@ class Settings:
             wf_test_months=max(1, int(os.getenv("WF_TEST_MONTHS", "1"))),
             wf_step_months=max(1, int(os.getenv("WF_STEP_MONTHS", "1"))),
             enable_realistic_execution=_parse_bool(os.getenv("ENABLE_REALISTIC_EXECUTION", "0"), default=False),
+            skip_realistic_comparison=_parse_bool(os.getenv("SKIP_REALISTIC_COMPARISON", "0"), default=False),
             spread_default_pips=max(0.0, float(os.getenv("SPREAD_DEFAULT_PIPS", "0.0"))),
             spread_by_pair=_parse_spread_map(os.getenv("SPREAD_BY_PAIR", "")),
             slippage_mode=os.getenv("SLIPPAGE_MODE", "none").strip().lower(),

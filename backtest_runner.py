@@ -87,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trade-cache", action="store_true", help="Use persisted trade cache for identical backtest runs")
     parser.add_argument("--refresh-trade-cache", action="store_true", help="Ignore persisted trade cache reads and overwrite it after the run")
     parser.add_argument("--trade-cache-dir", default=None, help="Override persisted trade cache directory")
+    parser.add_argument(
+        "--skip-realistic-comparison",
+        action="store_true",
+        help="Skip the extra baseline rerun when realistic execution/risk layers are enabled",
+    )
     parser.add_argument("--validate-shadow", action="store_true", help="Compare shadow scoring disabled vs enabled on the same historical data")
     parser.add_argument("--validate-mitigation-entry", action="store_true", help="Compare market entry vs mitigation limit entry on the same historical data")
     parser.add_argument("--validation-output-dir", default=None, help="Optional export directory for validation results")
@@ -864,6 +869,7 @@ def _safe_settings_payload(settings: Settings) -> dict[str, object]:
         "mt5_password",
         "backtest_trade_cache_dir",
         "enable_backtest_trade_cache",
+        "skip_realistic_comparison",
     ):
         payload.pop(key, None)
     return payload
@@ -958,6 +964,7 @@ def main() -> None:
     account_settings = build_account_settings(settings, args)
     backtest_end_time = resolve_backtest_end_time(settings, args)
     trade_cache = BacktestTradeCache(build_trade_cache_settings(settings, args))
+    skip_realistic_comparison = bool(args.skip_realistic_comparison or settings.skip_realistic_comparison)
     score_analysis_requested = args.analyze_scores or args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
     dynamic_threshold_analysis_enabled = args.dynamic_threshold_analysis or settings.enable_dynamic_threshold
     cache_mode = settings.market_data_cache_mode
@@ -1380,7 +1387,7 @@ def main() -> None:
             or settings.enable_equity_protection
         )
         comparison_payload: dict[str, object] | None = None
-        if realism_active:
+        if realism_active and not skip_realistic_comparison:
             baseline_engine = BacktestEngine(
                 market_data=market_data,
                 signal_engine=build_signal_engine(
@@ -1412,6 +1419,8 @@ def main() -> None:
             )
             baseline_result = baseline_engine.run(pairs)
             comparison_payload = print_realistic_comparison(baseline_result, result)
+        elif realism_active:
+            print("\nREALISTIC EXECUTION COMPARISON skipped (--skip-realistic-comparison/SKIP_REALISTIC_COMPARISON=1)")
 
         if score_analysis_requested:
             score_payload = build_score_distribution_report(
