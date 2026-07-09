@@ -85,6 +85,61 @@ If `--export-run-artifacts` is enabled, each scenario also exports:
 - `trades.csv`
 - `pair_summary.csv`
 
+## Friction Diagnostics
+
+After exporting run artifacts, diagnose why edge compresses under execution friction:
+
+```bash
+.venv/bin/python -m research.phase3_friction_diagnostics \
+  --suite-dir reports/phase3_strict_ltf_step3_full_suite \
+  --baseline ideal \
+  --scenarios moderate,harsh \
+  --top-losses 10 \
+  --output reports/phase3_friction_diagnostics.json
+```
+
+The diagnostics report breaks down:
+
+- losing trades by pair, regime, entry mode, entry source, exit reason, and sleeve
+- total spread/slippage/delay cost
+- worst trades by R
+- matched-trade deltas versus the ideal baseline
+- flags for regime drag, fallback-entry drag, timeout drag, and execution-friction drag
+
+## Phase 3.3 Pre-Trade Filter
+
+The pre-trade filter is disabled by default and affects backtests only when explicitly wired into a runner/config.
+
+Environment flags:
+
+- `ENABLE_PRE_TRADE_FILTER=0`
+- `PRE_TRADE_BLOCK_EXPANSION_CONTINUATION=0`
+- `PRE_TRADE_BLOCK_EXPANSION_CONTINUATION_FALLBACK=0`
+
+Current release-candidate hypothesis:
+
+- `timeout_fast_soft_fallback_no_expansion_continuation`
+- `timeout_fast` exits
+- soft MARKET fallback floor at trigger strength `8`
+- pre-trade veto for `EXPANSION + continuation`, independent of entry source
+
+Run the release-candidate validation pack:
+
+```bash
+.venv/bin/python -m research.phase3_hypothesis_calibration \
+  --pairs EURUSD,EURJPY,CADJPY \
+  --history-limit 3000 \
+  --evaluation-step 3 \
+  --scenarios timeout_fast,timeout_fast_soft_fallback_no_expansion_continuation \
+  --stress-presets mild,moderate,harsh \
+  --cache-only \
+  --trade-cache \
+  --mc-iterations 5000 \
+  --output reports/phase3_release_candidate_step3_full_stress.json
+```
+
+For cadence validation, repeat with `--evaluation-step 2` and compare against step 3.
+
 ## Interpretation Rules
 
 Treat a profile as live-candidate only if:

@@ -342,6 +342,9 @@ class Settings:
     enable_portfolio_risk_v2: bool
     enable_trade_gate_v2: bool
     enable_execution_quality_model: bool
+    enable_pre_trade_filter: bool
+    pre_trade_block_expansion_continuation: bool
+    pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
     prop_max_risk: float
     prop_dd_threshold_low: float
@@ -646,6 +649,15 @@ class Settings:
             enable_portfolio_risk_v2=_parse_bool(os.getenv("ENABLE_PORTFOLIO_RISK_V2", "0"), default=False),
             enable_trade_gate_v2=_parse_bool(os.getenv("ENABLE_TRADE_GATE_V2", "0"), default=False),
             enable_execution_quality_model=_parse_bool(os.getenv("ENABLE_EXECUTION_QUALITY_MODEL", "0"), default=False),
+            enable_pre_trade_filter=_parse_bool(os.getenv("ENABLE_PRE_TRADE_FILTER", "0"), default=False),
+            pre_trade_block_expansion_continuation=_parse_bool(
+                os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
+                default=False,
+            ),
+            pre_trade_block_expansion_continuation_fallback=_parse_bool(
+                os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION_FALLBACK", "0"),
+                default=False,
+            ),
             prop_base_risk=max(0.1, float(os.getenv("PROP_BASE_RISK", "1.0"))),
             prop_max_risk=max(0.1, float(os.getenv("PROP_MAX_RISK", "2.0"))),
             prop_dd_threshold_low=max(0.0, float(os.getenv("PROP_DD_THRESHOLD_LOW", "3.0"))),

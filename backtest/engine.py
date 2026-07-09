@@ -14,6 +14,7 @@ import pandas as pd
 from backtest.exit_engine import AdaptiveExitEngine, AdaptiveExitSettings
 from backtest.meta_label import MetaLabelDecision, MetaLabelEngine, MetaLabelSettings
 from backtest.portfolio_layer import PortfolioDecision, PortfolioLayerSettings, PortfolioLayerState
+from backtest.pretrade_filter import PreTradeFilter, PreTradeFilterSettings
 from backtest.execution import RealisticExecutionSettings, build_rng, volatility_slippage_factor
 from backtest.risk import ATRRiskSettings, EquityProtectionSettings, EquityProtectionState, atr_value_at
 from backtest.sizing import AdaptiveSizingEngine, AdaptiveSizingSettings, SizingDecision
@@ -546,6 +547,7 @@ class BacktestEngine:
         sizing_settings: AdaptiveSizingSettings | None = None,
         meta_label_settings: MetaLabelSettings | None = None,
         portfolio_layer_settings: PortfolioLayerSettings | None = None,
+        pre_trade_filter_settings: PreTradeFilterSettings | None = None,
         snapshot_cache_settings: SnapshotCacheSettings | None = None,
         snapshot_cache: SnapshotCache | None = None,
         smc_research_feature_settings: SMCResearchFeatureSettings | None = None,
@@ -566,6 +568,7 @@ class BacktestEngine:
         self.sizing_settings = (sizing_settings or AdaptiveSizingSettings()).sanitized()
         self.meta_label_settings = (meta_label_settings or MetaLabelSettings()).sanitized()
         self.portfolio_layer_settings = (portfolio_layer_settings or PortfolioLayerSettings()).sanitized()
+        self.pre_trade_filter_settings = (pre_trade_filter_settings or PreTradeFilterSettings()).sanitized()
         self.snapshot_cache_settings = (snapshot_cache_settings or SnapshotCacheSettings()).sanitized()
         self.smc_research_feature_settings = (smc_research_feature_settings or SMCResearchFeatureSettings()).sanitized()
         self.account_settings = (account_settings or BacktestAccountSettings()).sanitized()
@@ -574,6 +577,7 @@ class BacktestEngine:
         self.exit_engine = AdaptiveExitEngine(self.exit_settings)
         self.sizing_engine = AdaptiveSizingEngine(self.sizing_settings)
         self.meta_label_engine = MetaLabelEngine(self.meta_label_settings)
+        self.pre_trade_filter = PreTradeFilter(self.pre_trade_filter_settings)
         self._rng = build_rng(self.execution_settings.random_seed)
         self._snapshot_config_key = self._build_snapshot_config_key()
 
@@ -1352,6 +1356,17 @@ class BacktestEngine:
                 cursor += pair_evaluation_step
                 continue
 
+            portfolio_decision = (
+                portfolio_state.decide(decision.signal)
+                if portfolio_state is not None
+                else PortfolioDecision(sleeve="unassigned", multiplier=1.0, applied=False, reason="disabled")
+            )
+            pre_trade_decision = self.pre_trade_filter.evaluate(decision.signal, portfolio_decision)
+            if not pre_trade_decision.allowed:
+                rejection_counts[pre_trade_decision.reason] += 1
+                cursor += pair_evaluation_step
+                continue
+
             release_allowed, release_drop = self.signal_engine.gate_signal_release(decision.signal, commit=True)
             if not release_allowed:
                 rejection_counts[(release_drop.stage if release_drop is not None else "release_gate")] += 1
@@ -1376,11 +1391,6 @@ class BacktestEngine:
                 cursor += pair_evaluation_step
                 continue
 
-            portfolio_decision = (
-                portfolio_state.decide(decision.signal)
-                if portfolio_state is not None
-                else PortfolioDecision(sleeve="unassigned", multiplier=1.0, applied=False, reason="disabled")
-            )
             portfolio_multiplier = portfolio_decision.multiplier if portfolio_decision.applied else 1.0
             risk_multiplier = (
                 max(0.0, base_risk_multiplier)
@@ -1596,6 +1606,13 @@ class BacktestEngine:
             "portfolio_layer_learning_window": self.portfolio_layer_settings.learning_window,
             "portfolio_layer_min_trades_per_sleeve": self.portfolio_layer_settings.min_trades_per_sleeve,
             "portfolio_layer_max_sleeve_concentration": self.portfolio_layer_settings.max_sleeve_concentration,
+            "enable_pre_trade_filter": self.pre_trade_filter_settings.enabled,
+            "pre_trade_block_expansion_continuation": (
+                self.pre_trade_filter_settings.block_expansion_continuation
+            ),
+            "pre_trade_block_expansion_continuation_fallback": (
+                self.pre_trade_filter_settings.block_expansion_continuation_fallback
+            ),
             "enable_smc_research_features": self.smc_research_feature_settings.enabled,
             "smc_research_feature_settings": asdict(self.smc_research_feature_settings),
             "backtest_account_enabled": self.account_settings.enabled,

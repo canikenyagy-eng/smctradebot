@@ -20,6 +20,7 @@ from backtest_runner import (
     build_exit_settings,
     build_meta_label_settings,
     build_portfolio_layer_settings,
+    build_pre_trade_filter_settings,
     build_signal_engine,
     build_sizing_settings,
     build_smc_research_feature_settings,
@@ -317,6 +318,7 @@ def build_engine(
         sizing_settings=build_sizing_settings(settings),
         meta_label_settings=build_meta_label_settings(settings),
         portfolio_layer_settings=build_portfolio_layer_settings(settings),
+        pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
         snapshot_cache_settings=snapshot_settings,
         snapshot_cache=snapshot_cache,
         smc_research_feature_settings=build_smc_research_feature_settings(settings),
@@ -360,6 +362,7 @@ def cache_key_payload(
         "sizing_settings": asdict(build_sizing_settings(settings)),
         "meta_label_settings": asdict(build_meta_label_settings(settings)),
         "portfolio_layer_settings": asdict(build_portfolio_layer_settings(settings)),
+        "pre_trade_filter_settings": asdict(build_pre_trade_filter_settings(settings)),
     }
 
 

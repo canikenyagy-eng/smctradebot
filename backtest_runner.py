@@ -18,6 +18,7 @@ from backtest.engine import BacktestAccountSettings, BacktestEngine
 from backtest.meta_label import MetaLabelSettings
 from backtest.news import HistoricalNewsFeed, NeutralNewsFeed
 from backtest.portfolio_layer import PortfolioLayerSettings
+from backtest.pretrade_filter import PreTradeFilterSettings
 from backtest.risk import ATRRiskSettings, EquityProtectionSettings
 from backtest.smc_research_features import SMCResearchFeatureSettings
 from backtest.sizing import AdaptiveSizingSettings
@@ -835,6 +836,14 @@ def build_portfolio_layer_settings(settings: Settings) -> PortfolioLayerSettings
     )
 
 
+def build_pre_trade_filter_settings(settings: Settings) -> PreTradeFilterSettings:
+    return PreTradeFilterSettings(
+        enabled=settings.enable_pre_trade_filter,
+        block_expansion_continuation=settings.pre_trade_block_expansion_continuation,
+        block_expansion_continuation_fallback=settings.pre_trade_block_expansion_continuation_fallback,
+    )
+
+
 def build_snapshot_cache_settings(settings: Settings) -> SnapshotCacheSettings:
     return SnapshotCacheSettings(
         enabled=settings.enable_backtest_snapshot_cache,
@@ -908,6 +917,7 @@ def build_trade_cache_key_payload(
         "sizing_settings": asdict(build_sizing_settings(settings)),
         "meta_label_settings": asdict(build_meta_label_settings(settings)),
         "portfolio_layer_settings": asdict(build_portfolio_layer_settings(settings)),
+        "pre_trade_filter_settings": asdict(build_pre_trade_filter_settings(settings)),
         "smc_research_feature_settings": asdict(build_smc_research_feature_settings(settings)),
     }
 
@@ -1046,6 +1056,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1117,6 +1128,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1146,6 +1158,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1235,6 +1248,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1264,6 +1278,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1355,6 +1370,7 @@ def main() -> None:
             sizing_settings=build_sizing_settings(settings),
             meta_label_settings=build_meta_label_settings(settings),
             portfolio_layer_settings=build_portfolio_layer_settings(settings),
+            pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
             snapshot_cache_settings=build_snapshot_cache_settings(settings),
             smc_research_feature_settings=build_smc_research_feature_settings(settings),
             account_settings=account_settings,
@@ -1412,6 +1428,7 @@ def main() -> None:
                 sizing_settings=build_sizing_settings(settings),
                 meta_label_settings=build_meta_label_settings(settings),
                 portfolio_layer_settings=build_portfolio_layer_settings(settings),
+                pre_trade_filter_settings=build_pre_trade_filter_settings(settings),
                 snapshot_cache_settings=build_snapshot_cache_settings(settings),
                 smc_research_feature_settings=build_smc_research_feature_settings(settings),
                 account_settings=account_settings,
