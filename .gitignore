@@ -6,4 +6,5 @@ backtests/
 data/cache/
 logs/*.log
 logs/*.jsonl
+logs/*.json
 reports/

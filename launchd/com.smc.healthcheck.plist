@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.smc.healthcheck</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kanannagiev/Documents/New project/project/.venv/bin/python</string>
+        <string>-m</string>
+        <string>research.live_health_check</string>
+        <string>--alert</string>
+        <string>--output</string>
+        <string>logs/live_health_status.json</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kanannagiev/Documents/New project/project</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kanannagiev/Library/Logs/SMCSignalEngine/health-check.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kanannagiev/Library/Logs/SMCSignalEngine/health-check.err.log</string>
+</dict>
+</plist>

@@ -365,6 +365,12 @@ class Settings:
     forward_performance_sent_only: bool
     forward_performance_score_bucket_size: int
     forward_performance_min_closed_trades: int
+    enable_live_heartbeat: bool
+    live_heartbeat_path: str
+    health_max_scan_age_minutes: int
+    enable_health_alerts: bool
+    health_alert_state_path: str
+    health_alert_cooldown_minutes: int
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -730,6 +736,15 @@ class Settings:
                 0,
                 int(os.getenv("FORWARD_PERFORMANCE_MIN_CLOSED_TRADES", "0")),
             ),
+            enable_live_heartbeat=_parse_bool(os.getenv("ENABLE_LIVE_HEARTBEAT", "1"), default=True),
+            live_heartbeat_path=os.getenv("LIVE_HEARTBEAT_PATH", "logs/live_heartbeat.json").strip(),
+            health_max_scan_age_minutes=max(1, int(os.getenv("HEALTH_MAX_SCAN_AGE_MINUTES", "15"))),
+            enable_health_alerts=_parse_bool(os.getenv("ENABLE_HEALTH_ALERTS", "0"), default=False),
+            health_alert_state_path=os.getenv(
+                "HEALTH_ALERT_STATE_PATH",
+                "logs/live_health_alert_state.json",
+            ).strip(),
+            health_alert_cooldown_minutes=max(1, int(os.getenv("HEALTH_ALERT_COOLDOWN_MINUTES", "60"))),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,

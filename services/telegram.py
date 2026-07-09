@@ -72,7 +72,7 @@ class TelegramSignalService:
             if self.deduplicator.seen(fp):
                 return False
 
-        delivered = await self._send_message_with_retry(_format_signal(signal), signal)
+        delivered = await self._send_message_with_retry(_format_signal(signal), signal.symbol)
         if not delivered:
             return False
 
@@ -80,7 +80,10 @@ class TelegramSignalService:
             self.deduplicator.remember(fp)
         return True
 
-    async def _send_message_with_retry(self, text: str, signal: TradeSignal) -> bool:
+    async def send_text(self, text: str, *, label: str = "message") -> bool:
+        return await self._send_message_with_retry(text, label)
+
+    async def _send_message_with_retry(self, text: str, label: str) -> bool:
         for attempt in range(1, self.send_retries + 1):
             try:
                 await self.bot.send_message(chat_id=self.chat_id, text=text)
@@ -89,7 +92,7 @@ class TelegramSignalService:
                 if attempt >= self.send_retries:
                     logger.warning(
                         "Telegram send failed for %s after %s attempts: %s",
-                        signal.symbol,
+                        label,
                         attempt,
                         exc,
                     )
@@ -106,7 +109,7 @@ class TelegramSignalService:
                     "Telegram send attempt %s/%s failed for %s: %s | retrying in %.1fs",
                     attempt,
                     self.send_retries,
-                    signal.symbol,
+                    label,
                     exc,
                     delay,
                 )

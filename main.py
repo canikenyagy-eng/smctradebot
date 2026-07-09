@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config import Settings
@@ -12,6 +13,7 @@ from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
 from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
+from services.live_health import LiveHeartbeatSettings, LiveHeartbeatWriter
 from services.live_telemetry import LiveTelemetryLogger, LiveTelemetrySettings
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
 from services.pretrade_shadow import PreTradeShadowLogger, PreTradeShadowSettings
@@ -363,6 +365,12 @@ async def run_engine() -> None:
             include_score_breakdown=settings.forward_journal_include_score_breakdown,
         )
     )
+    heartbeat = LiveHeartbeatWriter(
+        LiveHeartbeatSettings(
+            enabled=settings.enable_live_heartbeat,
+            path=settings.live_heartbeat_path,
+        )
+    )
     pre_trade_shadow: PreTradeShadowLogger | None = None
     if settings.enable_pre_trade_filter_shadow:
         pre_trade_shadow = PreTradeShadowLogger(
@@ -412,7 +420,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -430,6 +438,7 @@ async def run_engine() -> None:
         settings.pre_trade_block_expansion_continuation,
         settings.pre_trade_block_expansion_continuation_fallback,
         settings.enable_forward_journal,
+        settings.enable_live_heartbeat,
     )
     telemetry.engine_started(
         pairs=live_pairs,
@@ -439,19 +448,41 @@ async def run_engine() -> None:
         exit_profile=settings.exit_profile_preset,
         pre_trade_shadow_enabled=settings.enable_pre_trade_filter_shadow,
     )
+    heartbeat.engine_started(
+        pairs=live_pairs,
+        data_source=settings.data_source,
+        live_mode=live_mode.name,
+        scan_interval_minutes=settings.scan_interval_minutes,
+    )
 
     try:
         while True:
             cycle_started = time.monotonic()
+            cycle_started_at = datetime.now(timezone.utc)
             cycle_id = telemetry.next_cycle_id()
             telemetry.scan_started(cycle_id=cycle_id, pairs=live_pairs)
+            heartbeat.scan_started(
+                cycle_id=cycle_id,
+                pairs=live_pairs,
+                scan_started_at=cycle_started_at,
+                scan_interval_minutes=settings.scan_interval_minutes,
+            )
             try:
                 signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
             except Exception as exc:
+                duration = time.monotonic() - cycle_started
                 telemetry.scan_failed(
                     cycle_id=cycle_id,
-                    duration_seconds=time.monotonic() - cycle_started,
+                    duration_seconds=duration,
                     error=exc,
+                )
+                heartbeat.scan_failed(
+                    cycle_id=cycle_id,
+                    pairs=live_pairs,
+                    scan_started_at=cycle_started_at,
+                    duration_seconds=duration,
+                    error=exc,
+                    scan_interval_minutes=settings.scan_interval_minutes,
                 )
                 raise
 
@@ -510,6 +541,15 @@ async def run_engine() -> None:
                 found_count=len(signals),
                 sent_count=sent_count,
                 shadow_would_block_count=sum(1 for row in pre_trade_shadow_rows if row.get("would_block")),
+            )
+            heartbeat.scan_completed(
+                cycle_id=cycle_id,
+                pairs=live_pairs,
+                scan_started_at=cycle_started_at,
+                duration_seconds=time.monotonic() - cycle_started,
+                found_count=len(signals),
+                sent_count=sent_count,
+                scan_interval_minutes=settings.scan_interval_minutes,
             )
             if shadow_logger is not None:
                 try:
