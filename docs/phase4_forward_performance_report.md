@@ -26,6 +26,21 @@ source .venv/bin/activate
 python -m research.forward_performance_report
 ```
 
+## Daily Helper
+
+Run outcome tracking and performance reporting together:
+
+```bash
+cd "/Users/kanannagiev/Documents/New project/project"
+scripts/run_forward_reports.sh
+```
+
+The helper writes a log to:
+
+```bash
+logs/forward_reports_daily.out.log
+```
+
 ## Recommended Workflow
 
 1. Run the live bot with forward journal enabled.
