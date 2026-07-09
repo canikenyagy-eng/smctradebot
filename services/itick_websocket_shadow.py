@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import random
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ class ItickWebSocketShadowSettings:
     log_path: Path | str = Path("logs/itick_websocket_shadow.jsonl")
     heartbeat_seconds: float = 30.0
     reconnect_seconds: float = 5.0
+    max_reconnect_seconds: float = 60.0
+    reconnect_backoff_factor: float = 2.0
+    reconnect_jitter_seconds: float = 1.0
     stale_seconds: float = 5.0
     max_latency_seconds: float = 2.0
     connect_timeout_seconds: float = 10.0
@@ -47,6 +51,9 @@ class ItickWebSocketShadowSettings:
             log_path=Path(self.log_path),
             heartbeat_seconds=max(5.0, float(self.heartbeat_seconds)),
             reconnect_seconds=max(1.0, float(self.reconnect_seconds)),
+            max_reconnect_seconds=max(float(self.reconnect_seconds), float(self.max_reconnect_seconds)),
+            reconnect_backoff_factor=max(1.0, float(self.reconnect_backoff_factor)),
+            reconnect_jitter_seconds=max(0.0, float(self.reconnect_jitter_seconds)),
             stale_seconds=max(1.0, float(self.stale_seconds)),
             max_latency_seconds=max(0.1, float(self.max_latency_seconds)),
             connect_timeout_seconds=max(1.0, float(self.connect_timeout_seconds)),
@@ -183,26 +190,63 @@ class ItickWebSocketShadowClient:
 
         deadline = time.monotonic() + run_seconds if run_seconds is not None else None
         self._write_event({"event": "starting", "pairs": list(pairs_tuple)})
+        consecutive_errors = 0
 
         while not self._stop.is_set():
             if deadline is not None and time.monotonic() >= deadline:
                 break
+            connection_started = time.monotonic()
             try:
                 await self._run_connection(pairs_tuple, deadline=deadline)
+                consecutive_errors = 0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._write_event({"event": "connection_error", "error_type": exc.__class__.__name__, "error": str(exc)})
+                connected_seconds = max(0.0, time.monotonic() - connection_started)
+                if connected_seconds >= self.settings.heartbeat_seconds:
+                    consecutive_errors = 1
+                else:
+                    consecutive_errors += 1
+                self._write_event(
+                    {
+                        "event": "connection_error",
+                        "error_type": exc.__class__.__name__,
+                        "error": str(exc),
+                        "connected_seconds": round(connected_seconds, 6),
+                        "consecutive_errors": consecutive_errors,
+                    }
+                )
                 logger.warning("iTick WebSocket shadow connection failed: %s", exc)
 
             if deadline is not None and time.monotonic() >= deadline:
                 break
+            delay_seconds = self._next_reconnect_delay(consecutive_errors)
+            self._write_event(
+                {
+                    "event": "reconnect_wait",
+                    "delay_seconds": round(delay_seconds, 6),
+                    "consecutive_errors": consecutive_errors,
+                }
+            )
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.settings.reconnect_seconds)
+                await asyncio.wait_for(self._stop.wait(), timeout=delay_seconds)
             except asyncio.TimeoutError:
                 continue
 
         self._write_event({"event": "stopped", "pairs": list(pairs_tuple)})
+
+    def _next_reconnect_delay(self, consecutive_errors: int) -> float:
+        if consecutive_errors <= 1:
+            base_delay = self.settings.reconnect_seconds
+        else:
+            base_delay = self.settings.reconnect_seconds * (self.settings.reconnect_backoff_factor ** (consecutive_errors - 1))
+        capped_delay = min(self.settings.max_reconnect_seconds, base_delay)
+        if self.settings.reconnect_jitter_seconds <= 0:
+            return capped_delay
+        return min(
+            self.settings.max_reconnect_seconds,
+            capped_delay + random.uniform(0.0, self.settings.reconnect_jitter_seconds),
+        )
 
     async def _run_connection(self, pairs: tuple[str, ...], *, deadline: float | None) -> None:
         try:
@@ -361,12 +405,16 @@ class ItickWebSocketShadowReporter:
         recent_minutes: int = 1440,
         stale_seconds: float = 5.0,
         max_latency_seconds: float = 2.0,
+        max_connection_errors: int = 3,
+        max_latest_quote_age_seconds: float = 30.0,
     ) -> None:
         self.log_path = Path(log_path)
         self.summary_path = Path(summary_path)
         self.recent_minutes = max(1, int(recent_minutes))
         self.stale_seconds = max(1.0, float(stale_seconds))
         self.max_latency_seconds = max(0.1, float(max_latency_seconds))
+        self.max_connection_errors = max(0, int(max_connection_errors))
+        self.max_latest_quote_age_seconds = max(1.0, float(max_latest_quote_age_seconds))
 
     def build_report(self) -> dict[str, object]:
         now = utc_now()
@@ -381,6 +429,22 @@ class ItickWebSocketShadowReporter:
             rows.append(row)
 
         quote_rows = [row for row in rows if row.get("event") == "quote"]
+        event_counts = Counter(str(row.get("event", "unknown")) for row in rows)
+        overall = self._stats(quote_rows)
+        latest_quote_age_seconds = self._latest_quote_age_seconds(quote_rows, now)
+        connection_errors = int(event_counts.get("connection_error", 0))
+        overall.update(
+            {
+                "connection_errors": connection_errors,
+                "max_connection_errors": self.max_connection_errors,
+                "latest_quote_age_seconds": round(latest_quote_age_seconds, 6) if latest_quote_age_seconds is not None else None,
+                "max_latest_quote_age_seconds": self.max_latest_quote_age_seconds,
+            }
+        )
+        if connection_errors > self.max_connection_errors:
+            overall["alert"] = True
+        if latest_quote_age_seconds is None or latest_quote_age_seconds > self.max_latest_quote_age_seconds:
+            overall["alert"] = True
         return {
             "type": "itick_websocket_shadow_summary",
             "version": 1,
@@ -391,9 +455,11 @@ class ItickWebSocketShadowReporter:
                 "recent_minutes": self.recent_minutes,
                 "stale_seconds": self.stale_seconds,
                 "max_latency_seconds": self.max_latency_seconds,
+                "max_connection_errors": self.max_connection_errors,
+                "max_latest_quote_age_seconds": self.max_latest_quote_age_seconds,
             },
-            "overall": self._stats(quote_rows),
-            "events": dict(Counter(str(row.get("event", "unknown")) for row in rows)),
+            "overall": overall,
+            "events": dict(event_counts),
             "by_pair": self._group(quote_rows, "pair"),
             "latest_by_pair": self._latest_by_pair(quote_rows),
         }
@@ -445,3 +511,13 @@ class ItickWebSocketShadowReporter:
             }
             for pair, row in sorted(latest.items())
         }
+
+    def _latest_quote_age_seconds(self, rows: Iterable[Mapping[str, object]], now: datetime) -> float | None:
+        latest_observed_at: datetime | None = None
+        for row in rows:
+            observed_at = parse_provider_time(row.get("observed_at"))
+            if observed_at is not None and (latest_observed_at is None or observed_at > latest_observed_at):
+                latest_observed_at = observed_at
+        if latest_observed_at is None:
+            return None
+        return max(0.0, (now - latest_observed_at).total_seconds())

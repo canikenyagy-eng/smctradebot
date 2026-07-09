@@ -17,8 +17,13 @@ ITICK_WEBSOCKET_LOG_PATH=logs/itick_websocket_shadow.jsonl
 ITICK_WEBSOCKET_SUMMARY_PATH=reports/itick_websocket_shadow_summary.json
 ITICK_WEBSOCKET_HEARTBEAT_SECONDS=30
 ITICK_WEBSOCKET_RECONNECT_SECONDS=5
+ITICK_WEBSOCKET_MAX_RECONNECT_SECONDS=60
+ITICK_WEBSOCKET_RECONNECT_BACKOFF_FACTOR=2
+ITICK_WEBSOCKET_RECONNECT_JITTER_SECONDS=1
 ITICK_WEBSOCKET_STALE_SECONDS=5
 ITICK_WEBSOCKET_MAX_LATENCY_SECONDS=2
+ITICK_WEBSOCKET_MAX_CONNECTION_ERRORS=3
+ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS=30
 ```
 
 `ITICK_API_KEY`, `ITICK_API_KEY_HEADER=token`, `ITICK_AUTH_SCHEME=`, and `ITICK_SYMBOL_FORMAT={base}{quote}` are reused from the existing iTick REST config.
@@ -73,6 +78,8 @@ Use iTick as live-candle candidate only after several live sessions where:
 - p95 quote latency is below `2s`
 - stale quote rate is near `0%`
 - reconnects/errors are rare
+- connection-error count stays below `ITICK_WEBSOCKET_MAX_CONNECTION_ERRORS` inside the report window
+- latest quote age stays below `ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS`
 - price behavior is consistent with another reference source
 
 If iTick passes, the next step is a separate `LiveBarBuilder` that builds M5/M15/H1 candles from WebSocket quotes.

@@ -218,8 +218,13 @@ class Settings:
     itick_websocket_summary_path: str
     itick_websocket_heartbeat_seconds: float
     itick_websocket_reconnect_seconds: float
+    itick_websocket_max_reconnect_seconds: float
+    itick_websocket_reconnect_backoff_factor: float
+    itick_websocket_reconnect_jitter_seconds: float
     itick_websocket_stale_seconds: float
     itick_websocket_max_latency_seconds: float
+    itick_websocket_max_connection_errors: int
+    itick_websocket_max_latest_quote_age_seconds: float
     enable_live_bar_builder: bool
     live_bar_builder_timeframes: List[str]
     live_bar_builder_dir: str
@@ -560,6 +565,18 @@ class Settings:
                 1.0,
                 float(os.getenv("ITICK_WEBSOCKET_RECONNECT_SECONDS", "5")),
             ),
+            itick_websocket_max_reconnect_seconds=max(
+                1.0,
+                float(os.getenv("ITICK_WEBSOCKET_MAX_RECONNECT_SECONDS", "60")),
+            ),
+            itick_websocket_reconnect_backoff_factor=max(
+                1.0,
+                float(os.getenv("ITICK_WEBSOCKET_RECONNECT_BACKOFF_FACTOR", "2")),
+            ),
+            itick_websocket_reconnect_jitter_seconds=max(
+                0.0,
+                float(os.getenv("ITICK_WEBSOCKET_RECONNECT_JITTER_SECONDS", "1")),
+            ),
             itick_websocket_stale_seconds=max(
                 1.0,
                 float(os.getenv("ITICK_WEBSOCKET_STALE_SECONDS", "5")),
@@ -567,6 +584,14 @@ class Settings:
             itick_websocket_max_latency_seconds=max(
                 0.1,
                 float(os.getenv("ITICK_WEBSOCKET_MAX_LATENCY_SECONDS", "2")),
+            ),
+            itick_websocket_max_connection_errors=max(
+                0,
+                int(os.getenv("ITICK_WEBSOCKET_MAX_CONNECTION_ERRORS", "3")),
+            ),
+            itick_websocket_max_latest_quote_age_seconds=max(
+                1.0,
+                float(os.getenv("ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS", "30")),
             ),
             enable_live_bar_builder=_parse_bool(os.getenv("ENABLE_LIVE_BAR_BUILDER", "0"), default=False),
             live_bar_builder_timeframes=_parse_csv_upper(os.getenv("LIVE_BAR_BUILDER_TIMEFRAMES", "M5,M15,H1")),

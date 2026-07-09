@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -131,8 +131,9 @@ class LiveBarMarketDataProvider(MarketDataProvider):
             return
 
         latest = pd.Timestamp(live.index[-1]).to_pydatetime()
-        age_seconds = max(0.0, (_utc_now() - latest).total_seconds())
         timeframe_seconds = _timeframe_seconds(timeframe)
+        freshness_time = latest if self.config.include_current_bar else latest + timedelta(seconds=timeframe_seconds)
+        age_seconds = max(0.0, (_utc_now() - freshness_time).total_seconds())
         max_age = max(self.config.max_live_bar_age_seconds, timeframe_seconds * 2.0)
         if self.config.require_live_overlay and age_seconds > max_age:
             raise ConnectionError(
