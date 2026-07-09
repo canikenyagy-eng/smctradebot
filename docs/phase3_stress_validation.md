@@ -151,3 +151,27 @@ Treat a profile as live-candidate only if:
 - Harsh stress does not fully collapse the edge.
 
 If `moderate` is positive but MC p05 is negative, keep the profile in shadow/live-candidate mode before enabling it as a default.
+
+## Shadow-Live RC Veto
+
+To observe the current RC veto in live without changing Telegram signals, copy the values from:
+
+```bash
+docs/phase3_rc_shadow_live.env.example
+```
+
+into `.env`, then run the bot normally. Keep `ENABLE_PRE_TRADE_FILTER=0`; only `ENABLE_PRE_TRADE_FILTER_SHADOW=1` should be enabled for observation.
+
+The shadow logger writes JSONL rows to:
+
+```bash
+logs/pre_trade_filter_shadow.jsonl
+```
+
+Watch the log with:
+
+```bash
+tail -f logs/pre_trade_filter_shadow.jsonl
+```
+
+A row with `"would_block": true` means the RC veto would have blocked that live signal, but the signal is still sent to Telegram because this is shadow-only.

@@ -12,6 +12,7 @@ from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
+from services.pretrade_shadow import PreTradeShadowLogger, PreTradeShadowSettings
 from services.telegram import TelegramSignalService
 
 
@@ -346,6 +347,16 @@ async def run_engine() -> None:
     shadow_logger: MarketDataShadowLogger | None = None
     shadow_engine: SignalEngine | None = None
     shadow_market_data: MarketDataClient | None = None
+    pre_trade_shadow: PreTradeShadowLogger | None = None
+    if settings.enable_pre_trade_filter_shadow:
+        pre_trade_shadow = PreTradeShadowLogger(
+            PreTradeShadowSettings(
+                enabled=True,
+                log_path=settings.pre_trade_filter_shadow_log_path,
+                block_expansion_continuation=settings.pre_trade_block_expansion_continuation,
+                block_expansion_continuation_fallback=settings.pre_trade_block_expansion_continuation_fallback,
+            )
+        )
     if settings.enable_market_data_shadow:
         shadow_cache_dir = Path(settings.market_data_shadow_cache_dir) / settings.market_data_shadow_candidate_source
         shadow_market_data = _build_market_data(
@@ -385,7 +396,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -399,12 +410,17 @@ async def run_engine() -> None:
         _format_windows(live_mode.session_gate_windows_utc) if live_mode.enable_session_gate else "-",
         ",".join(live_mode.regime_label_blocklist) if live_mode.enable_regime_label_gate else "-",
         ",".join(pair_profiles.keys()) if pair_profiles else "-",
+        settings.enable_pre_trade_filter_shadow,
+        settings.pre_trade_block_expansion_continuation,
+        settings.pre_trade_block_expansion_continuation_fallback,
     )
 
     try:
         while True:
             cycle_started = time.monotonic()
             signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
+            if pre_trade_shadow is not None:
+                await asyncio.to_thread(pre_trade_shadow.evaluate_signals, signals)
 
             sent_count = 0
             for signal in signals:

@@ -343,6 +343,8 @@ class Settings:
     enable_trade_gate_v2: bool
     enable_execution_quality_model: bool
     enable_pre_trade_filter: bool
+    enable_pre_trade_filter_shadow: bool
+    pre_trade_filter_shadow_log_path: str
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -650,6 +652,14 @@ class Settings:
             enable_trade_gate_v2=_parse_bool(os.getenv("ENABLE_TRADE_GATE_V2", "0"), default=False),
             enable_execution_quality_model=_parse_bool(os.getenv("ENABLE_EXECUTION_QUALITY_MODEL", "0"), default=False),
             enable_pre_trade_filter=_parse_bool(os.getenv("ENABLE_PRE_TRADE_FILTER", "0"), default=False),
+            enable_pre_trade_filter_shadow=_parse_bool(
+                os.getenv("ENABLE_PRE_TRADE_FILTER_SHADOW", "0"),
+                default=False,
+            ),
+            pre_trade_filter_shadow_log_path=os.getenv(
+                "PRE_TRADE_FILTER_SHADOW_LOG_PATH",
+                "logs/pre_trade_filter_shadow.jsonl",
+            ).strip(),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,
