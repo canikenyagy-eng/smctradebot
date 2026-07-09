@@ -12,6 +12,7 @@ from core.pair_profiles import PairRuntimeProfile, build_pair_runtime_profiles, 
 from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient, MarketDataDiagnosticsConfig
 from execution.news import NewsFilter
+from services.feed_safe_mode import FeedSafeModeGuard
 from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
 from services.itick_websocket_shadow import ItickWebSocketShadowClient, ItickWebSocketShadowSettings
 from services.live_bar_builder import LiveBarBuilder, LiveBarBuilderSettings
@@ -421,6 +422,7 @@ async def run_engine() -> None:
             path=settings.live_heartbeat_path,
         )
     )
+    feed_safe_mode = FeedSafeModeGuard(settings)
     pre_trade_shadow: PreTradeShadowLogger | None = None
     if settings.enable_pre_trade_filter_shadow:
         pre_trade_shadow = PreTradeShadowLogger(
@@ -505,7 +507,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s itick_ws_shadow=%s live_bar_builder=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s itick_ws_shadow=%s live_bar_builder=%s feed_safe_mode=%s block=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -529,6 +531,8 @@ async def run_engine() -> None:
         settings.enable_market_data_diagnostics,
         settings.enable_itick_websocket_shadow,
         settings.enable_live_bar_builder,
+        settings.enable_feed_safe_mode,
+        settings.feed_safe_mode_block_signals,
     )
     telemetry.engine_started(
         pairs=live_pairs,
@@ -560,7 +564,21 @@ async def run_engine() -> None:
                 scan_interval_minutes=settings.scan_interval_minutes,
             )
             try:
-                signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
+                safe_mode_decision = await asyncio.to_thread(feed_safe_mode.evaluate)
+                if settings.enable_feed_safe_mode:
+                    telemetry.event(
+                        "live_feed_safe_mode",
+                        cycle_id=cycle_id,
+                        **safe_mode_decision.to_dict(),
+                    )
+                if safe_mode_decision.should_block():
+                    logger.warning(
+                        "Feed safe mode active; skipping signal scan | reason=%s",
+                        safe_mode_decision.reason,
+                    )
+                    signals = []
+                else:
+                    signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
             except Exception as exc:
                 duration = time.monotonic() - cycle_started
                 telemetry.scan_failed(

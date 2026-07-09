@@ -85,6 +85,7 @@ FEED_HEALTH_CHECK_ITICK_WEBSOCKET=1
 FEED_HEALTH_CHECK_LIVE_BARS=1
 FEED_HEALTH_CHECK_REDUNDANCY=0
 FEED_HEALTH_LIVE_BAR_MAX_AGE_SECONDS=180
+FEED_HEALTH_LIVE_BAR_MAX_STALE_RATE=0.005
 ```
 
 Manual dry run without Telegram:
@@ -107,3 +108,40 @@ The checker marks the bot unhealthy when:
 - redundancy check is enabled and reports failed/stale provider attempts
 
 Alerts are sent only when the health state changes, cooldown expires, or the bot recovers.
+
+## Feed Safe Mode
+
+Feed safe mode is an automatic pre-scan circuit breaker. It uses the same feed diagnostics as health alerts, but instead of only notifying Telegram, it can block new signal generation when feed quality degrades.
+
+```env
+ENABLE_FEED_SAFE_MODE=1
+FEED_SAFE_MODE_BLOCK_SIGNALS=1
+FEED_SAFE_MODE_RECENT_MINUTES=60
+FEED_SAFE_MODE_CHECK_ITICK_WEBSOCKET=1
+FEED_SAFE_MODE_CHECK_LIVE_BARS=1
+FEED_SAFE_MODE_CHECK_REDUNDANCY=0
+FEED_SAFE_MODE_LIVE_BAR_MAX_AGE_SECONDS=180
+FEED_SAFE_MODE_LIVE_BAR_MAX_STALE_RATE=0.005
+FEED_SAFE_MODE_LOG_PATH=logs/feed_safe_mode.jsonl
+```
+
+Behavior:
+
+- safe mode runs at the start of each live scan cycle.
+- when every checked feed component is healthy, scanning continues normally.
+- when any checked feed component is unhealthy and `FEED_SAFE_MODE_BLOCK_SIGNALS=1`, the bot skips `engine.scan_pairs`.
+- LiveBarBuilder is considered degraded when stale updates exceed `FEED_SAFE_MODE_LIVE_BAR_MAX_STALE_RATE`.
+- skipped cycles write `found=0` and `sent=0`; no Telegram trade signal is generated from degraded data.
+- every decision is logged to `FEED_SAFE_MODE_LOG_PATH`.
+
+Dry-run the decision without restarting the bot:
+
+```bash
+ENABLE_FEED_SAFE_MODE=1 python - <<'PY'
+from config import Settings
+from services.feed_safe_mode import FeedSafeModeGuard
+
+decision = FeedSafeModeGuard(Settings.from_env()).evaluate()
+print(decision.to_dict())
+PY
+```

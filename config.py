@@ -419,6 +419,16 @@ class Settings:
     feed_health_check_live_bars: bool
     feed_health_check_redundancy: bool
     feed_health_live_bar_max_age_seconds: float
+    feed_health_live_bar_max_stale_rate: float
+    enable_feed_safe_mode: bool
+    feed_safe_mode_block_signals: bool
+    feed_safe_mode_recent_minutes: int
+    feed_safe_mode_check_itick_websocket: bool
+    feed_safe_mode_check_live_bars: bool
+    feed_safe_mode_check_redundancy: bool
+    feed_safe_mode_live_bar_max_age_seconds: float
+    feed_safe_mode_live_bar_max_stale_rate: float
+    feed_safe_mode_log_path: str
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -950,6 +960,37 @@ class Settings:
                 1.0,
                 float(os.getenv("FEED_HEALTH_LIVE_BAR_MAX_AGE_SECONDS", "180")),
             ),
+            feed_health_live_bar_max_stale_rate=max(
+                0.0,
+                min(1.0, float(os.getenv("FEED_HEALTH_LIVE_BAR_MAX_STALE_RATE", "0.005"))),
+            ),
+            enable_feed_safe_mode=_parse_bool(os.getenv("ENABLE_FEED_SAFE_MODE", "0"), default=False),
+            feed_safe_mode_block_signals=_parse_bool(
+                os.getenv("FEED_SAFE_MODE_BLOCK_SIGNALS", "1"),
+                default=True,
+            ),
+            feed_safe_mode_recent_minutes=max(1, int(os.getenv("FEED_SAFE_MODE_RECENT_MINUTES", "60"))),
+            feed_safe_mode_check_itick_websocket=_parse_bool(
+                os.getenv("FEED_SAFE_MODE_CHECK_ITICK_WEBSOCKET", "1"),
+                default=True,
+            ),
+            feed_safe_mode_check_live_bars=_parse_bool(
+                os.getenv("FEED_SAFE_MODE_CHECK_LIVE_BARS", "1"),
+                default=True,
+            ),
+            feed_safe_mode_check_redundancy=_parse_bool(
+                os.getenv("FEED_SAFE_MODE_CHECK_REDUNDANCY", "0"),
+                default=False,
+            ),
+            feed_safe_mode_live_bar_max_age_seconds=max(
+                1.0,
+                float(os.getenv("FEED_SAFE_MODE_LIVE_BAR_MAX_AGE_SECONDS", "180")),
+            ),
+            feed_safe_mode_live_bar_max_stale_rate=max(
+                0.0,
+                min(1.0, float(os.getenv("FEED_SAFE_MODE_LIVE_BAR_MAX_STALE_RATE", "0.005"))),
+            ),
+            feed_safe_mode_log_path=os.getenv("FEED_SAFE_MODE_LOG_PATH", "logs/feed_safe_mode.jsonl").strip(),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,
