@@ -72,3 +72,38 @@ Pass criteria:
 - selected source is normally `live_bars`.
 - backup selection only appears during real primary feed outages.
 - stale attempts are rejected, not silently used.
+
+## Telegram Health Alerts
+
+The live health checker can include feed diagnostics in the same cooldown-protected Telegram alert stream:
+
+```env
+ENABLE_HEALTH_ALERTS=1
+ENABLE_FEED_HEALTH_CHECKS=1
+FEED_HEALTH_RECENT_MINUTES=60
+FEED_HEALTH_CHECK_ITICK_WEBSOCKET=1
+FEED_HEALTH_CHECK_LIVE_BARS=1
+FEED_HEALTH_CHECK_REDUNDANCY=0
+FEED_HEALTH_LIVE_BAR_MAX_AGE_SECONDS=180
+```
+
+Manual dry run without Telegram:
+
+```bash
+python -m research.live_health_check --no-alert --output logs/live_health_status.json
+```
+
+Manual run with Telegram alerting:
+
+```bash
+python -m research.live_health_check --alert --output logs/live_health_status.json
+```
+
+The checker marks the bot unhealthy when:
+
+- heartbeat is missing/stale/failed
+- iTick WebSocket summary is in alert state
+- LiveBarBuilder summary is in alert state
+- redundancy check is enabled and reports failed/stale provider attempts
+
+Alerts are sent only when the health state changes, cooldown expires, or the bot recovers.

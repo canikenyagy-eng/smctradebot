@@ -13,9 +13,13 @@ from services.live_health import (
     HealthAlertState,
     HealthCheckSettings,
     LiveHealthChecker,
+    combine_health_components,
     format_health_message,
 )
+from services.itick_websocket_shadow import ItickWebSocketShadowReporter
+from services.live_bar_builder import LiveBarBuilderReporter
 from services.telegram import TelegramSignalService
+from research.market_data_redundancy_report import build_report as build_redundancy_report
 
 
 def configure_logging() -> None:
@@ -92,6 +96,137 @@ def print_result(payload: dict[str, object]) -> None:
     print(f"Age: {payload.get('age_seconds')} / {payload.get('max_age_seconds')} seconds")
     print(f"Heartbeat: {payload.get('heartbeat_path')}")
     print(f"Alert: sent={payload.get('alert_sent')} reason={payload.get('alert_reason')}")
+    components = payload.get("components")
+    if isinstance(components, list) and components:
+        print("Components:")
+        for component in components:
+            if isinstance(component, dict):
+                marker = "OK" if component.get("ok") else "ALERT"
+                print(f"  {marker} {component.get('name')}: {component.get('reason')}")
+
+
+def _component(name: str, ok: bool, reason: str, details: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "name": name,
+        "ok": bool(ok),
+        "reason": reason,
+        "details": details or {},
+    }
+
+
+def _itick_component(settings: Settings) -> dict[str, object]:
+    reporter = ItickWebSocketShadowReporter(
+        log_path=settings.itick_websocket_log_path,
+        summary_path=settings.itick_websocket_summary_path,
+        recent_minutes=settings.feed_health_recent_minutes,
+        stale_seconds=settings.itick_websocket_stale_seconds,
+        max_latency_seconds=settings.itick_websocket_max_latency_seconds,
+        max_stale_rate=settings.itick_websocket_max_stale_rate,
+        max_slow_rate=settings.itick_websocket_max_slow_rate,
+        max_connection_errors=settings.itick_websocket_max_connection_errors,
+        max_latest_quote_age_seconds=settings.itick_websocket_max_latest_quote_age_seconds,
+    )
+    report = reporter.build_report()
+    reporter.write_report(report)
+    overall = report.get("overall", {})
+    if not isinstance(overall, dict):
+        return _component("itick_websocket", False, "summary missing")
+    ok = overall.get("alert") is not True
+    reason = (
+        "healthy"
+        if ok
+        else (
+            f"quotes={overall.get('quotes', 0)} stale={overall.get('stale', 0)} "
+            f"slow_rate={float(overall.get('slow_rate', 0.0)):.3%} "
+            f"errors={overall.get('connection_errors', 0)} "
+            f"latest_age={overall.get('latest_quote_age_seconds')}"
+        )
+    )
+    return _component(
+        "itick_websocket",
+        ok,
+        reason,
+        {
+            "quotes": overall.get("quotes", 0),
+            "stale": overall.get("stale", 0),
+            "slow": overall.get("slow", 0),
+            "slow_rate": overall.get("slow_rate", 0.0),
+            "connection_errors": overall.get("connection_errors", 0),
+            "latest_quote_age_seconds": overall.get("latest_quote_age_seconds"),
+        },
+    )
+
+
+def _live_bar_component(settings: Settings) -> dict[str, object]:
+    reporter = LiveBarBuilderReporter(
+        log_path=settings.live_bar_builder_log_path,
+        recent_minutes=settings.feed_health_recent_minutes,
+        max_bar_age_seconds=settings.feed_health_live_bar_max_age_seconds,
+    )
+    report = reporter.build_report()
+    output = Path(settings.live_bar_builder_summary_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    overall = report.get("overall", {})
+    if not isinstance(overall, dict):
+        return _component("live_bar_builder", False, "summary missing")
+    ok = overall.get("alert") is not True
+    reason = (
+        "healthy"
+        if ok
+        else (
+            f"updates={overall.get('updates', 0)} stale_updates={overall.get('stale_updates', 0)} "
+            f"max_age={overall.get('max_bar_age_seconds')}"
+        )
+    )
+    return _component(
+        "live_bar_builder",
+        ok,
+        reason,
+        {
+            "updates": overall.get("updates", 0),
+            "closed": overall.get("closed", 0),
+            "stale_updates": overall.get("stale_updates", 0),
+            "max_bar_age_seconds": overall.get("max_bar_age_seconds", 0),
+        },
+    )
+
+
+def _redundancy_component(settings: Settings) -> dict[str, object]:
+    report = build_redundancy_report(Path(settings.market_data_redundancy_log_path), settings.feed_health_recent_minutes)
+    failed = int(report.get("failed", 0) or 0)
+    stale_attempts = report.get("stale_attempts", {})
+    stale_count = sum(int(value) for value in stale_attempts.values()) if isinstance(stale_attempts, dict) else 0
+    ok = failed == 0 and stale_count == 0
+    reason = "healthy" if ok else f"failed={failed} stale_attempts={stale_count}"
+    return _component(
+        "market_data_redundancy",
+        ok,
+        reason,
+        {
+            "requests": report.get("requests", 0),
+            "ok": report.get("ok", 0),
+            "failed": failed,
+            "selected_source": report.get("selected_source", {}),
+            "stale_attempts": stale_attempts,
+        },
+    )
+
+
+def build_feed_components(settings: Settings) -> list[dict[str, object]]:
+    if not settings.enable_feed_health_checks:
+        return []
+    components: list[dict[str, object]] = []
+    if settings.feed_health_check_itick_websocket and (
+        settings.enable_itick_websocket_shadow or settings.enable_live_bar_builder
+    ):
+        components.append(_itick_component(settings))
+    if settings.feed_health_check_live_bars and settings.enable_live_bar_builder:
+        components.append(_live_bar_component(settings))
+    should_check_redundancy = settings.feed_health_check_redundancy or settings.data_source.strip().lower() == "redundant"
+    if should_check_redundancy:
+        components.append(_redundancy_component(settings))
+    return components
 
 
 def main() -> None:
@@ -100,6 +235,7 @@ def main() -> None:
     settings = Settings.from_env()
     checker = LiveHealthChecker(build_check_settings(settings, args))
     result = checker.check()
+    result = combine_health_components(result, build_feed_components(settings))
     alert_state = HealthAlertState(build_alert_settings(settings, args))
     alert_sent, alert_reason = asyncio.run(maybe_send_alert(settings, alert_state, result))
     payload = result.to_dict()

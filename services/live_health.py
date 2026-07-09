@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from html import escape
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -74,6 +74,7 @@ class HealthCheckResult:
     age_seconds: float | None
     max_age_seconds: float
     heartbeat: dict[str, object]
+    components: tuple[dict[str, object], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -85,6 +86,7 @@ class HealthCheckResult:
             "age_seconds": self.age_seconds,
             "max_age_seconds": self.max_age_seconds,
             "heartbeat": self.heartbeat,
+            "components": list(self.components),
         }
 
 
@@ -366,6 +368,16 @@ def format_health_message(result: HealthCheckResult) -> str:
     age_text = "n/a" if result.age_seconds is None else f"{result.age_seconds:.0f}s"
     icon = "✅" if result.ok else "🚨"
     title = "SMC BOT HEALTH OK" if result.ok else "SMC BOT HEALTH ALERT"
+    component_lines = ""
+    if result.components:
+        lines = []
+        for component in result.components[:8]:
+            ok = bool(component.get("ok"))
+            marker = "OK" if ok else "ALERT"
+            name = escape(str(component.get("name", "component")))
+            reason = escape(str(component.get("reason", "-")))
+            lines.append(f"{marker} {name}: {reason}")
+        component_lines = "\n\n<b>Components:</b>\n" + "\n".join(lines)
     return (
         f"{icon} <b>{title}</b>\n\n"
         f"<b>Status:</b> {escape(result.status)}\n"
@@ -375,5 +387,26 @@ def format_health_message(result: HealthCheckResult) -> str:
         f"<b>Pairs:</b> {escape(pair_text)}\n"
         f"<b>Found/Sent:</b> {escape(str(heartbeat.get('found_count', '-')))} / {escape(str(heartbeat.get('sent_count', '-')))}\n"
         f"<b>Heartbeat:</b> {escape(result.heartbeat_path)}\n"
+        f"{component_lines}\n"
         f"<b>UTC:</b> {escape(result.observed_at)}"
+    )
+
+
+def combine_health_components(
+    result: HealthCheckResult,
+    components: Sequence[Mapping[str, object]],
+) -> HealthCheckResult:
+    normalized = tuple(dict(component) for component in components)
+    failed = [component for component in normalized if component.get("ok") is not True]
+    if not failed:
+        return replace(result, components=normalized)
+    if not result.ok:
+        return replace(result, components=normalized)
+    first = failed[0]
+    return replace(
+        result,
+        ok=False,
+        status="feed_alert",
+        reason=f"{first.get('name', 'feed')}: {first.get('reason', 'unhealthy')}",
+        components=normalized,
     )

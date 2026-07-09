@@ -413,6 +413,12 @@ class Settings:
     enable_health_alerts: bool
     health_alert_state_path: str
     health_alert_cooldown_minutes: int
+    enable_feed_health_checks: bool
+    feed_health_recent_minutes: int
+    feed_health_check_itick_websocket: bool
+    feed_health_check_live_bars: bool
+    feed_health_check_redundancy: bool
+    feed_health_live_bar_max_age_seconds: float
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -631,7 +637,7 @@ class Settings:
             ),
             itick_websocket_max_latest_quote_age_seconds=max(
                 1.0,
-                float(os.getenv("ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS", "30")),
+                float(os.getenv("ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS", "180")),
             ),
             enable_live_bar_builder=_parse_bool(os.getenv("ENABLE_LIVE_BAR_BUILDER", "0"), default=False),
             live_bar_builder_timeframes=_parse_csv_upper(os.getenv("LIVE_BAR_BUILDER_TIMEFRAMES", "M5,M15,H1")),
@@ -926,6 +932,24 @@ class Settings:
                 "logs/live_health_alert_state.json",
             ).strip(),
             health_alert_cooldown_minutes=max(1, int(os.getenv("HEALTH_ALERT_COOLDOWN_MINUTES", "60"))),
+            enable_feed_health_checks=_parse_bool(os.getenv("ENABLE_FEED_HEALTH_CHECKS", "0"), default=False),
+            feed_health_recent_minutes=max(1, int(os.getenv("FEED_HEALTH_RECENT_MINUTES", "60"))),
+            feed_health_check_itick_websocket=_parse_bool(
+                os.getenv("FEED_HEALTH_CHECK_ITICK_WEBSOCKET", "1"),
+                default=True,
+            ),
+            feed_health_check_live_bars=_parse_bool(
+                os.getenv("FEED_HEALTH_CHECK_LIVE_BARS", "1"),
+                default=True,
+            ),
+            feed_health_check_redundancy=_parse_bool(
+                os.getenv("FEED_HEALTH_CHECK_REDUNDANCY", "0"),
+                default=False,
+            ),
+            feed_health_live_bar_max_age_seconds=max(
+                1.0,
+                float(os.getenv("FEED_HEALTH_LIVE_BAR_MAX_AGE_SECONDS", "180")),
+            ),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,
