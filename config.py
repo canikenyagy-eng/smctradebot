@@ -228,6 +228,11 @@ class Settings:
     live_bar_builder_max_bars: int
     live_bar_builder_flush_seconds: float
     live_bar_builder_max_quote_age_seconds: float
+    live_bar_provider_dir: str
+    live_bar_provider_fallback_source: str
+    live_bar_provider_include_current_bar: bool
+    live_bar_provider_require_live_overlay: bool
+    live_bar_provider_max_live_bar_age_seconds: float
     enable_market_data_freshness_gate: bool
     max_live_candle_age_seconds: int
     enable_market_data_diagnostics: bool
@@ -535,9 +540,10 @@ class Settings:
                 os.getenv("ENABLE_ITICK_WEBSOCKET_SHADOW", "0"),
                 default=False,
             ),
-            itick_websocket_url=os.getenv("ITICK_WEBSOCKET_URL", "wss://api.itick.org/forex").strip(),
-            itick_websocket_region=os.getenv("ITICK_WEBSOCKET_REGION", "GB").strip().upper(),
-            itick_websocket_types=os.getenv("ITICK_WEBSOCKET_TYPES", "quote").strip(),
+            itick_websocket_url=os.getenv("ITICK_WEBSOCKET_URL", "wss://api.itick.org/forex").strip()
+            or "wss://api.itick.org/forex",
+            itick_websocket_region=os.getenv("ITICK_WEBSOCKET_REGION", "GB").strip().upper() or "GB",
+            itick_websocket_types=os.getenv("ITICK_WEBSOCKET_TYPES", "quote").strip() or "quote",
             itick_websocket_log_path=os.getenv(
                 "ITICK_WEBSOCKET_LOG_PATH",
                 "logs/itick_websocket_shadow.jsonl",
@@ -578,6 +584,20 @@ class Settings:
             live_bar_builder_max_quote_age_seconds=max(
                 1.0,
                 float(os.getenv("LIVE_BAR_BUILDER_MAX_QUOTE_AGE_SECONDS", "5")),
+            ),
+            live_bar_provider_dir=os.getenv("LIVE_BAR_PROVIDER_DIR", "data/live_bars/itick").strip(),
+            live_bar_provider_fallback_source=os.getenv("LIVE_BAR_PROVIDER_FALLBACK_SOURCE", "yahoo").strip().lower(),
+            live_bar_provider_include_current_bar=_parse_bool(
+                os.getenv("LIVE_BAR_PROVIDER_INCLUDE_CURRENT_BAR", "0"),
+                default=False,
+            ),
+            live_bar_provider_require_live_overlay=_parse_bool(
+                os.getenv("LIVE_BAR_PROVIDER_REQUIRE_LIVE_OVERLAY", "0"),
+                default=False,
+            ),
+            live_bar_provider_max_live_bar_age_seconds=max(
+                60.0,
+                float(os.getenv("LIVE_BAR_PROVIDER_MAX_LIVE_BAR_AGE_SECONDS", "7200")),
             ),
             enable_market_data_freshness_gate=_parse_bool(
                 os.getenv("ENABLE_MARKET_DATA_FRESHNESS_GATE", "0"),

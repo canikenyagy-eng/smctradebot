@@ -116,6 +116,45 @@ data/live_bars/itick/
 
 The next migration step is a dedicated live-bar market data provider that can read these files and replace Yahoo only after bar freshness is stable.
 
+## LiveBarMarketDataProvider
+
+`DATA_SOURCE=live_bars` enables a hybrid provider:
+
+- historical candles come from `LIVE_BAR_PROVIDER_FALLBACK_SOURCE`
+- fresh tail candles come from `data/live_bars/itick/*.csv`
+- overlapping timestamps are replaced by the iTick-built bars
+- the normal OHLCV cache is bypassed for `live_bars` so fresh local bars are not hidden by cached reads
+
+Recommended candidate config:
+
+```env
+DATA_SOURCE=live_bars
+LIVE_BAR_PROVIDER_DIR=data/live_bars/itick
+LIVE_BAR_PROVIDER_FALLBACK_SOURCE=yahoo
+LIVE_BAR_PROVIDER_INCLUDE_CURRENT_BAR=0
+LIVE_BAR_PROVIDER_REQUIRE_LIVE_OVERLAY=1
+LIVE_BAR_PROVIDER_MAX_LIVE_BAR_AGE_SECONDS=7200
+```
+
+Use completed bars first (`LIVE_BAR_PROVIDER_INCLUDE_CURRENT_BAR=0`) to avoid intrabar repaint risk. Current in-progress bars can be tested later, but should not be the first live default.
+
+Smoke-check the provider before switching live:
+
+```bash
+python -m research.live_bar_provider_check \
+  --pairs EURUSD,EURJPY,CADJPY \
+  --timeframes M5,M15,H1 \
+  --limit 10 \
+  --require-live-overlay
+```
+
+Only switch the live bot after:
+
+- WebSocket shadow report has `Alert: False`
+- LiveBarBuilder report has `Alert: False`
+- `live_bar_provider_check` returns rows for M5, M15, and H1
+- at least one full H1 bar has been built locally
+
 ## Troubleshooting
 
 `server rejected WebSocket connection: HTTP 401` means the WebSocket cluster rejected authentication. Check that:

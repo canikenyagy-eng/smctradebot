@@ -87,6 +87,7 @@ class MarketDataClient:
         mt5_server: str = "",
         mt5_path: str = "",
         itick_config: dict[str, object] | None = None,
+        live_bar_config: dict[str, object] | None = None,
         cache_config: MarketDataCacheConfig | None = None,
         diagnostics_config: MarketDataDiagnosticsConfig | None = None,
     ) -> None:
@@ -108,6 +109,7 @@ class MarketDataClient:
             data_source=self.data_source,
             mt5_config=mt5_config,
             itick_config=itick_config,
+            live_bar_config=live_bar_config,
             history_limit=history_limit,
         )
 

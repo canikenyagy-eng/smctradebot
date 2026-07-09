@@ -72,6 +72,17 @@ def _itick_config_from_settings(settings: Settings) -> dict[str, object]:
     }
 
 
+def _live_bar_config_from_settings(settings: Settings) -> dict[str, object]:
+    return {
+        "bars_dir": settings.live_bar_provider_dir,
+        "fallback_source": settings.live_bar_provider_fallback_source,
+        "include_current_bar": settings.live_bar_provider_include_current_bar,
+        "require_live_overlay": settings.live_bar_provider_require_live_overlay,
+        "max_live_bar_age_seconds": settings.live_bar_provider_max_live_bar_age_seconds,
+        "itick_config": _itick_config_from_settings(settings),
+    }
+
+
 def _build_market_data(
     settings: Settings,
     *,
@@ -79,19 +90,27 @@ def _build_market_data(
     cache_dir: str | Path | None = None,
     ttl_hours: float | None = None,
 ) -> MarketDataClient:
+    source = (data_source or settings.data_source).strip().lower()
+    cache_enabled = settings.market_data_cache_enabled
+    cache_mode = settings.market_data_cache_mode
+    if source == "live_bars":
+        cache_enabled = False
+        cache_mode = "disabled"
+
     return MarketDataClient(
         history_limit=settings.history_limit,
-        data_source=data_source or settings.data_source,
+        data_source=source,
         mt5_login=settings.mt5_login,
         mt5_password=settings.mt5_password,
         mt5_server=settings.mt5_server,
         mt5_path=settings.mt5_path,
         itick_config=_itick_config_from_settings(settings),
+        live_bar_config=_live_bar_config_from_settings(settings),
         cache_config=MarketDataCacheConfig(
-            enabled=settings.market_data_cache_enabled,
+            enabled=cache_enabled,
             cache_dir=cache_dir or settings.market_data_cache_dir,
             ttl_hours=settings.market_data_cache_ttl_hours if ttl_hours is None else ttl_hours,
-            mode=settings.market_data_cache_mode,
+            mode=cache_mode,
         ),
         diagnostics_config=MarketDataDiagnosticsConfig(
             enabled=settings.enable_market_data_diagnostics,
