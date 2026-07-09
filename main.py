@@ -83,6 +83,25 @@ def _live_bar_config_from_settings(settings: Settings) -> dict[str, object]:
     }
 
 
+def _redundant_config_from_settings(settings: Settings) -> dict[str, object]:
+    return {
+        "primary_source": settings.market_data_redundancy_primary_source,
+        "backup_sources": settings.market_data_redundancy_backup_sources,
+        "require_fresh": settings.market_data_redundancy_require_fresh,
+        "max_candle_age_seconds": settings.market_data_redundancy_max_candle_age_seconds,
+        "fail_closed": settings.market_data_redundancy_fail_closed,
+        "log_path": settings.market_data_redundancy_log_path,
+        "itick_config": _itick_config_from_settings(settings),
+        "live_bar_config": _live_bar_config_from_settings(settings),
+        "mt5_config": {
+            "login": settings.mt5_login,
+            "password": settings.mt5_password,
+            "server": settings.mt5_server,
+            "path": settings.mt5_path,
+        },
+    }
+
+
 def _build_market_data(
     settings: Settings,
     *,
@@ -93,7 +112,7 @@ def _build_market_data(
     source = (data_source or settings.data_source).strip().lower()
     cache_enabled = settings.market_data_cache_enabled
     cache_mode = settings.market_data_cache_mode
-    if source == "live_bars":
+    if source in {"live_bars", "redundant"}:
         cache_enabled = False
         cache_mode = "disabled"
 
@@ -106,6 +125,7 @@ def _build_market_data(
         mt5_path=settings.mt5_path,
         itick_config=_itick_config_from_settings(settings),
         live_bar_config=_live_bar_config_from_settings(settings),
+        redundant_config=_redundant_config_from_settings(settings),
         cache_config=MarketDataCacheConfig(
             enabled=cache_enabled,
             cache_dir=cache_dir or settings.market_data_cache_dir,

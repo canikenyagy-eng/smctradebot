@@ -210,6 +210,12 @@ class Settings:
     market_data_shadow_compare_signals: bool
     market_data_shadow_max_close_diff_pips: float
     market_data_shadow_max_staleness_seconds: int
+    market_data_redundancy_primary_source: str
+    market_data_redundancy_backup_sources: List[str]
+    market_data_redundancy_require_fresh: bool
+    market_data_redundancy_max_candle_age_seconds: float
+    market_data_redundancy_fail_closed: bool
+    market_data_redundancy_log_path: str
     enable_itick_websocket_shadow: bool
     itick_websocket_url: str
     itick_websocket_region: str
@@ -543,6 +549,30 @@ class Settings:
                 1,
                 int(os.getenv("MARKET_DATA_SHADOW_MAX_STALENESS_SECONDS", "120")),
             ),
+            market_data_redundancy_primary_source=os.getenv(
+                "MARKET_DATA_REDUNDANCY_PRIMARY_SOURCE",
+                "live_bars",
+            ).strip().lower()
+            or "live_bars",
+            market_data_redundancy_backup_sources=_parse_csv_upper(
+                os.getenv("MARKET_DATA_REDUNDANCY_BACKUP_SOURCES", "")
+            ),
+            market_data_redundancy_require_fresh=_parse_bool(
+                os.getenv("MARKET_DATA_REDUNDANCY_REQUIRE_FRESH", "1"),
+                default=True,
+            ),
+            market_data_redundancy_max_candle_age_seconds=max(
+                60.0,
+                float(os.getenv("MARKET_DATA_REDUNDANCY_MAX_CANDLE_AGE_SECONDS", "1800")),
+            ),
+            market_data_redundancy_fail_closed=_parse_bool(
+                os.getenv("MARKET_DATA_REDUNDANCY_FAIL_CLOSED", "1"),
+                default=True,
+            ),
+            market_data_redundancy_log_path=os.getenv(
+                "MARKET_DATA_REDUNDANCY_LOG_PATH",
+                "logs/market_data_redundancy.jsonl",
+            ).strip(),
             enable_itick_websocket_shadow=_parse_bool(
                 os.getenv("ENABLE_ITICK_WEBSOCKET_SHADOW", "0"),
                 default=False,

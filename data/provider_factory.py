@@ -22,6 +22,7 @@ from data.market_data_base import (
 from data.itick_provider import ItickConfig, ItickMarketDataProvider
 from data.live_bar_provider import LiveBarMarketDataProvider, LiveBarProviderConfig
 from data.mt5_provider import MT5MarketDataProvider
+from data.redundant_provider import RedundantMarketDataProvider, RedundantProviderConfig
 from data.yahoo_provider import YahooMarketDataProvider
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,11 @@ class MarketDataManager:
         if self.provider_name == "live_bars":
             return provider_class(
                 config=LiveBarProviderConfig.from_dict(self.provider_config),
+                history_limit=self.history_limit,
+            )
+        if self.provider_name == "redundant":
+            return provider_class(
+                config=RedundantProviderConfig.from_dict(self.provider_config),
                 history_limit=self.history_limit,
             )
         else:
@@ -211,6 +217,7 @@ def get_default_manager(
     mt5_config: Optional[dict] = None,
     itick_config: Optional[dict] = None,
     live_bar_config: Optional[dict] = None,
+    redundant_config: Optional[dict] = None,
     history_limit: int = 500,
 ) -> MarketDataManager:
     """Get default market data manager.
@@ -228,6 +235,8 @@ def get_default_manager(
         provider_config = mt5_config
     elif data_source == "live_bars":
         provider_config = live_bar_config
+    elif data_source == "redundant":
+        provider_config = redundant_config
     else:
         provider_config = itick_config
     return MarketDataManager(
