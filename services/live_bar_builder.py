@@ -166,6 +166,8 @@ class LiveBarBuilder:
         )
         self._last_flush = 0.0
         self._ignored_quotes = 0
+        if self.settings.enabled:
+            self._load_existing_state()
 
     def on_quote(self, quote: Mapping[str, object]) -> None:
         if not self.settings.enabled:
@@ -290,6 +292,122 @@ class LiveBarBuilder:
         }
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+    def _load_existing_state(self) -> None:
+        rows_by_key: defaultdict[tuple[str, str], dict[datetime, dict[str, object]]] = defaultdict(dict)
+        for row in self._iter_persisted_rows():
+            pair = clean_pair(row.get("pair"))
+            timeframe = str(row.get("timeframe") or "").upper().strip()
+            start_time = parse_time(row.get("timestamp"))
+            if len(pair) != 6 or timeframe not in self.settings.timeframes or start_time is None:
+                continue
+            existing = rows_by_key[(pair, timeframe)].get(start_time)
+            if existing is None or self._row_observed_at(row) >= self._row_observed_at(existing):
+                rows_by_key[(pair, timeframe)][start_time] = row
+
+        loaded_closed = 0
+        loaded_current = 0
+        for key, rows_by_time in rows_by_key.items():
+            pair, timeframe = key
+            bars = [self._bar_from_row(row) for _, row in sorted(rows_by_time.items())]
+            valid_bars = [bar for bar in bars if bar is not None]
+            if not valid_bars:
+                continue
+
+            closed_bars = [bar for bar in valid_bars if bar.complete]
+            current_bars = [bar for bar in valid_bars if not bar.complete]
+            for bar in closed_bars[-self.settings.max_bars_per_timeframe :]:
+                self._closed[key].append(bar)
+                loaded_closed += 1
+
+            if current_bars:
+                current = max(current_bars, key=lambda bar: bar.start_time)
+                last_closed = self._closed.get(key)
+                if not last_closed or current.start_time > last_closed[-1].start_time:
+                    self._current[key] = current
+                    loaded_current += 1
+
+            # Ensure all files are present immediately after a restart, before the next quote flush.
+            rows = [bar.to_row() for bar in self._closed.get(key, [])]
+            current = self._current.get(key)
+            if current is not None:
+                rows.append(current.to_row())
+            self._write_state(pair=pair, timeframe=timeframe, rows=rows)
+
+        if loaded_closed or loaded_current:
+            self._write_event(
+                {
+                    "event": "state_loaded",
+                    "closed_bars": loaded_closed,
+                    "current_bars": loaded_current,
+                }
+            )
+
+    def _iter_persisted_rows(self) -> Iterable[dict[str, object]]:
+        bars_dir = Path(self.settings.bars_dir)
+        if bars_dir.exists():
+            for path in sorted(bars_dir.glob("*.csv")):
+                try:
+                    frame = pd.read_csv(path)
+                except Exception as exc:
+                    logger.warning("Failed to load live bar snapshot %s: %s", path, exc)
+                    continue
+                for row in frame.to_dict(orient="records"):
+                    if isinstance(row, dict):
+                        yield row
+
+        for row in read_jsonl(self.settings.log_path):
+            if str(row.get("type")) != "live_bar_builder":
+                continue
+            if row.get("event") not in {"bar_update", "bar_closed"}:
+                continue
+            yield row
+
+    def _row_observed_at(self, row: Mapping[str, object]) -> datetime:
+        observed_at = parse_time(row.get("observed_at")) or parse_time(row.get("last_observed_at"))
+        return observed_at or datetime.fromtimestamp(0, timezone.utc)
+
+    def _bar_from_row(self, row: Mapping[str, object]) -> MutableBar | None:
+        pair = clean_pair(row.get("pair"))
+        timeframe = str(row.get("timeframe") or "").upper().strip()
+        start_time = parse_time(row.get("timestamp"))
+        parsed_end_time = parse_time(row.get("end_time"))
+        first_provider_time = parse_time(row.get("first_provider_time"))
+        last_provider_time = parse_time(row.get("last_provider_time"))
+        last_observed_at = parse_time(row.get("last_observed_at")) or self._row_observed_at(row)
+        open_price = as_float(row.get("open"))
+        high_price = as_float(row.get("high"))
+        low_price = as_float(row.get("low"))
+        close_price = as_float(row.get("close"))
+        volume = as_float(row.get("volume"))
+        quote_count = as_float(row.get("quote_count"))
+        if (
+            len(pair) != 6
+            or timeframe not in TIMEFRAME_SECONDS
+            or start_time is None
+            or open_price is None
+            or high_price is None
+            or low_price is None
+            or close_price is None
+        ):
+            return None
+        provider_time = last_provider_time or first_provider_time or start_time
+        return MutableBar(
+            pair=pair,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=parsed_end_time or end_time(start_time, timeframe),
+            open=open_price,
+            high=high_price,
+            low=low_price,
+            close=close_price,
+            volume=float(volume if volume is not None else 0.0),
+            quote_count=max(0, int(quote_count or 0)),
+            first_provider_time=first_provider_time or provider_time,
+            last_provider_time=provider_time,
+            last_observed_at=last_observed_at,
+            complete=str(row.get("complete")).strip().lower() in {"true", "1", "yes"},
+        )
 
 
 class LiveBarBuilderReporter:
