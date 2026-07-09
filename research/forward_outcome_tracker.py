@@ -8,6 +8,7 @@ from pathlib import Path
 from config import Settings
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from services.forward_outcomes import ForwardOutcomeSettings, ForwardOutcomeTracker
+from main import _itick_config_from_settings, _live_bar_config_from_settings, _redundant_config_from_settings
 
 
 def configure_logging() -> None:
@@ -40,22 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def itick_config_from_settings(settings: Settings) -> dict[str, object]:
-    return {
-        "api_key": settings.itick_api_key,
-        "base_url": settings.itick_base_url,
-        "ohlcv_path_template": settings.itick_ohlcv_path_template,
-        "ticks_path_template": settings.itick_ticks_path_template,
-        "api_key_header": settings.itick_api_key_header,
-        "api_key_query_param": settings.itick_api_key_query_param,
-        "auth_scheme": settings.itick_auth_scheme,
-        "symbol_format": settings.itick_symbol_format,
-        "timeout_seconds": settings.itick_timeout_seconds,
-        "timeframe_map": settings.itick_timeframe_map,
-        "extra_headers": settings.itick_extra_headers,
-    }
-
-
 def cache_mode(args: argparse.Namespace) -> str:
     if args.cache_only:
         return "cache_only"
@@ -65,19 +50,27 @@ def cache_mode(args: argparse.Namespace) -> str:
 
 
 def build_market_data(settings: Settings, args: argparse.Namespace, history_limit: int) -> MarketDataClient:
+    source = (args.data_source or settings.data_source).strip().lower()
+    cache_enabled = settings.market_data_cache_enabled
+    selected_cache_mode = cache_mode(args)
+    if source in {"live_bars", "redundant"}:
+        cache_enabled = False
+        selected_cache_mode = "disabled"
     return MarketDataClient(
         history_limit=max(settings.history_limit, history_limit),
-        data_source=(args.data_source or settings.data_source).strip().lower(),
+        data_source=source,
         mt5_login=settings.mt5_login,
         mt5_password=settings.mt5_password,
         mt5_server=settings.mt5_server,
         mt5_path=settings.mt5_path,
-        itick_config=itick_config_from_settings(settings),
+        itick_config=_itick_config_from_settings(settings),
+        live_bar_config=_live_bar_config_from_settings(settings),
+        redundant_config=_redundant_config_from_settings(settings),
         cache_config=MarketDataCacheConfig(
-            enabled=settings.market_data_cache_enabled,
+            enabled=cache_enabled,
             cache_dir=args.cache_dir or settings.market_data_cache_dir,
             ttl_hours=settings.market_data_cache_ttl_hours,
-            mode=cache_mode(args),
+            mode=selected_cache_mode,
         ),
     )
 

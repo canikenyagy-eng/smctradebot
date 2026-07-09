@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-unsent", action="store_true", help="Include all candidates even if env sent-only is enabled")
     parser.add_argument("--score-bucket-size", type=int, default=None, help="Score bucket size, e.g. 5 or 10")
     parser.add_argument("--min-closed-trades", type=int, default=None, help="Minimum closed-with-R sample marker per group")
+    parser.add_argument("--recent-minutes", type=int, default=None, help="Only include candidates generated in this window")
     parser.add_argument("--no-rows", action="store_true", help="Omit per-candidate rows from exported JSON")
     return parser
 
@@ -45,6 +46,7 @@ def build_settings(settings: Settings, args: argparse.Namespace) -> ForwardPerfo
             if args.min_closed_trades is not None
             else settings.forward_performance_min_closed_trades
         ),
+        recent_minutes=args.recent_minutes,
     )
 
 

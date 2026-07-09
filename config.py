@@ -407,6 +407,10 @@ class Settings:
     forward_performance_sent_only: bool
     forward_performance_score_bucket_size: int
     forward_performance_min_closed_trades: int
+    daily_forward_report_path: str
+    daily_forward_report_recent_minutes: int
+    daily_forward_report_sent_only: bool
+    daily_forward_report_min_closed_trades: int
     enable_live_heartbeat: bool
     live_heartbeat_path: str
     health_max_scan_age_minutes: int
@@ -932,6 +936,22 @@ class Settings:
             forward_performance_min_closed_trades=max(
                 0,
                 int(os.getenv("FORWARD_PERFORMANCE_MIN_CLOSED_TRADES", "0")),
+            ),
+            daily_forward_report_path=os.getenv(
+                "DAILY_FORWARD_REPORT_PATH",
+                "reports/daily_live_forward_report.json",
+            ).strip(),
+            daily_forward_report_recent_minutes=max(
+                1,
+                int(os.getenv("DAILY_FORWARD_REPORT_RECENT_MINUTES", "1440")),
+            ),
+            daily_forward_report_sent_only=_parse_bool(
+                os.getenv("DAILY_FORWARD_REPORT_SENT_ONLY", "0"),
+                default=False,
+            ),
+            daily_forward_report_min_closed_trades=max(
+                0,
+                int(os.getenv("DAILY_FORWARD_REPORT_MIN_CLOSED_TRADES", "10")),
             ),
             enable_live_heartbeat=_parse_bool(os.getenv("ENABLE_LIVE_HEARTBEAT", "1"), default=True),
             live_heartbeat_path=os.getenv("LIVE_HEARTBEAT_PATH", "logs/live_heartbeat.json").strip(),

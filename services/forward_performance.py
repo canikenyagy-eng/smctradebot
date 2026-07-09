@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -19,8 +19,12 @@ class ForwardPerformanceSettings:
     sent_only: bool = False
     score_bucket_size: int = 5
     min_closed_trades: int = 0
+    recent_minutes: int | None = None
 
     def normalized(self) -> "ForwardPerformanceSettings":
+        recent_minutes = None
+        if self.recent_minutes is not None:
+            recent_minutes = max(1, int(self.recent_minutes))
         return ForwardPerformanceSettings(
             journal_path=Path(self.journal_path),
             outcome_path=Path(self.outcome_path),
@@ -28,6 +32,7 @@ class ForwardPerformanceSettings:
             sent_only=bool(self.sent_only),
             score_bucket_size=max(1, int(self.score_bucket_size)),
             min_closed_trades=max(0, int(self.min_closed_trades)),
+            recent_minutes=recent_minutes,
         )
 
 
@@ -116,6 +121,9 @@ class ForwardPerformanceReporter:
 
     def build_report(self) -> dict[str, object]:
         candidates = load_candidates(self.settings.journal_path, sent_only=self.settings.sent_only)
+        if self.settings.recent_minutes is not None:
+            cutoff = pd.Timestamp(datetime.now(timezone.utc) - timedelta(minutes=self.settings.recent_minutes))
+            candidates = [candidate for candidate in candidates if candidate.generated_at >= cutoff]
         outcomes = load_latest_outcomes(self.settings.outcome_path)
         rows = [self._row(candidate, outcomes.get(candidate.journal_id)) for candidate in candidates]
 
@@ -130,6 +138,7 @@ class ForwardPerformanceReporter:
                 "sent_only": self.settings.sent_only,
                 "score_bucket_size": self.settings.score_bucket_size,
                 "min_closed_trades": self.settings.min_closed_trades,
+                "recent_minutes": self.settings.recent_minutes,
             },
             "overall": self._stats(rows),
             "by_pair": self._group(rows, lambda row: str(row["symbol"])),
