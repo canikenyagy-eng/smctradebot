@@ -11,6 +11,7 @@ from core.pair_profiles import PairRuntimeProfile, build_pair_runtime_profiles, 
 from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
+from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
 from services.live_telemetry import LiveTelemetryLogger, LiveTelemetrySettings
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
 from services.pretrade_shadow import PreTradeShadowLogger, PreTradeShadowSettings
@@ -355,6 +356,13 @@ async def run_engine() -> None:
             include_signal_details=settings.live_telemetry_include_signal_details,
         )
     )
+    forward_journal = ForwardSignalJournal(
+        ForwardJournalSettings(
+            enabled=settings.enable_forward_journal,
+            log_path=settings.forward_journal_log_path,
+            include_score_breakdown=settings.forward_journal_include_score_breakdown,
+        )
+    )
     pre_trade_shadow: PreTradeShadowLogger | None = None
     if settings.enable_pre_trade_filter_shadow:
         pre_trade_shadow = PreTradeShadowLogger(
@@ -404,7 +412,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -421,6 +429,7 @@ async def run_engine() -> None:
         settings.enable_pre_trade_filter_shadow,
         settings.pre_trade_block_expansion_continuation,
         settings.pre_trade_block_expansion_continuation_fallback,
+        settings.enable_forward_journal,
     )
     telemetry.engine_started(
         pairs=live_pairs,
@@ -452,15 +461,38 @@ async def run_engine() -> None:
                 pre_trade_shadow_rows = await asyncio.to_thread(pre_trade_shadow.evaluate_signals, signals)
                 telemetry.pre_trade_shadow_summary(cycle_id=cycle_id, rows=pre_trade_shadow_rows)
 
+            shadow_by_fingerprint = {
+                str(row.get("fingerprint")): row
+                for row in pre_trade_shadow_rows
+                if row.get("fingerprint") is not None
+            }
+            journal_ids: dict[str, str] = {}
+            for signal in signals:
+                fingerprint = signal.fingerprint()
+                journal_ids[fingerprint] = forward_journal.record_candidate(
+                    cycle_id=cycle_id,
+                    signal=signal,
+                    pre_trade_shadow=shadow_by_fingerprint.get(fingerprint),
+                )
+
             sent_count = 0
             for signal in signals:
                 send_started = time.monotonic()
                 delivered = await telegram.send_signal(signal)
+                delivery_latency = time.monotonic() - send_started
                 telemetry.telegram_delivery(
                     cycle_id=cycle_id,
                     signal=signal,
                     delivered=delivered,
-                    latency_seconds=time.monotonic() - send_started,
+                    latency_seconds=delivery_latency,
+                )
+                forward_journal.record_delivery(
+                    cycle_id=cycle_id,
+                    journal_id=journal_ids.get(signal.fingerprint())
+                    or forward_journal.build_journal_id(cycle_id=cycle_id, signal=signal),
+                    signal=signal,
+                    delivered=delivered,
+                    latency_seconds=delivery_latency,
                 )
                 if delivered:
                     sent_count += 1

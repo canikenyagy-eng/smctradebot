@@ -348,6 +348,9 @@ class Settings:
     enable_live_telemetry: bool
     live_telemetry_log_path: str
     live_telemetry_include_signal_details: bool
+    enable_forward_journal: bool
+    forward_journal_log_path: str
+    forward_journal_include_score_breakdown: bool
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -667,6 +670,12 @@ class Settings:
             live_telemetry_log_path=os.getenv("LIVE_TELEMETRY_LOG_PATH", "logs/live_telemetry.jsonl").strip(),
             live_telemetry_include_signal_details=_parse_bool(
                 os.getenv("LIVE_TELEMETRY_INCLUDE_SIGNAL_DETAILS", "1"),
+                default=True,
+            ),
+            enable_forward_journal=_parse_bool(os.getenv("ENABLE_FORWARD_JOURNAL", "0"), default=False),
+            forward_journal_log_path=os.getenv("FORWARD_JOURNAL_LOG_PATH", "logs/forward_journal.jsonl").strip(),
+            forward_journal_include_score_breakdown=_parse_bool(
+                os.getenv("FORWARD_JOURNAL_INCLUDE_SCORE_BREAKDOWN", "1"),
                 default=True,
             ),
             pre_trade_block_expansion_continuation=_parse_bool(
