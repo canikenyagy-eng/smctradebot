@@ -411,6 +411,8 @@ class Settings:
     daily_forward_report_recent_minutes: int
     daily_forward_report_sent_only: bool
     daily_forward_report_min_closed_trades: int
+    daily_forward_report_send_telegram: bool
+    daily_forward_report_telegram_on_no_signals: bool
     enable_live_heartbeat: bool
     live_heartbeat_path: str
     health_max_scan_age_minutes: int
@@ -952,6 +954,14 @@ class Settings:
             daily_forward_report_min_closed_trades=max(
                 0,
                 int(os.getenv("DAILY_FORWARD_REPORT_MIN_CLOSED_TRADES", "10")),
+            ),
+            daily_forward_report_send_telegram=_parse_bool(
+                os.getenv("DAILY_FORWARD_REPORT_SEND_TELEGRAM", "0"),
+                default=False,
+            ),
+            daily_forward_report_telegram_on_no_signals=_parse_bool(
+                os.getenv("DAILY_FORWARD_REPORT_TELEGRAM_ON_NO_SIGNALS", "1"),
+                default=True,
             ),
             enable_live_heartbeat=_parse_bool(os.getenv("ENABLE_LIVE_HEARTBEAT", "1"), default=True),
             live_heartbeat_path=os.getenv("LIVE_HEARTBEAT_PATH", "logs/live_heartbeat.json").strip(),

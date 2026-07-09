@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -11,9 +12,11 @@ from main import _itick_config_from_settings, _live_bar_config_from_settings, _r
 from services.daily_forward_report import (
     DailyForwardReportBuilder,
     DailyForwardReportSettings,
+    format_daily_forward_report_message,
     print_daily_forward_report,
 )
 from services.forward_outcomes import ForwardOutcomeSettings, ForwardOutcomeTracker
+from services.telegram import TelegramSignalService
 
 
 def configure_logging() -> None:
@@ -33,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-unsent", action="store_true", help="Include all candidates even if env sent-only is enabled")
     parser.add_argument("--min-closed-trades", type=int, default=None, help="Minimum closed outcomes before acting on stats")
     parser.add_argument("--include-rows", action="store_true", help="Keep per-candidate rows in exported JSON")
+    parser.add_argument("--telegram", action="store_true", help="Send the compact daily summary to Telegram")
+    parser.add_argument("--no-telegram", action="store_true", help="Do not send Telegram summary even if env enables it")
     return parser
 
 
@@ -130,6 +135,32 @@ def build_report_settings(settings: Settings, args: argparse.Namespace) -> Daily
     )
 
 
+def should_send_telegram(settings: Settings, args: argparse.Namespace, report: dict[str, object]) -> bool:
+    if args.no_telegram:
+        return False
+    enabled = settings.daily_forward_report_send_telegram or args.telegram
+    if not enabled:
+        return False
+    if settings.daily_forward_report_telegram_on_no_signals:
+        return True
+    performance = report.get("performance")
+    overall = performance.get("overall", {}) if isinstance(performance, dict) else {}
+    return int(overall.get("candidates", 0) or 0) > 0
+
+
+async def send_telegram_summary(settings: Settings, report: dict[str, object]) -> bool:
+    telegram = TelegramSignalService(
+        token=settings.telegram_bot_token,
+        chat_id=settings.telegram_chat_id,
+        send_retries=settings.telegram_send_retries,
+        retry_base_delay_seconds=settings.telegram_retry_base_delay_seconds,
+    )
+    try:
+        return await telegram.send_text(format_daily_forward_report_message(report), label="daily_forward_report")
+    finally:
+        await telegram.close()
+
+
 def main() -> None:
     configure_logging()
     args = build_parser().parse_args()
@@ -142,6 +173,10 @@ def main() -> None:
     report = builder.build_report(outcome_update=outcome_update)
     builder.write_report(report)
     print_daily_forward_report(report)
+    telegram_sent = False
+    if should_send_telegram(settings, args, report):
+        telegram_sent = asyncio.run(send_telegram_summary(settings, report))
+        print(f"Telegram summary sent: {telegram_sent}")
     print(f"Report saved: {builder.settings.report_path}")
 
 

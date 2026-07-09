@@ -28,7 +28,7 @@ python -m research.forward_performance_report
 
 ## Daily Helper
 
-Run outcome tracking and performance reporting together:
+Run the current daily forward validation helper:
 
 ```bash
 cd "/Users/kanannagiev/Documents/New project/project"
@@ -39,6 +39,12 @@ The helper writes a log to:
 
 ```bash
 logs/forward_reports_daily.out.log
+```
+
+The helper now delegates to:
+
+```bash
+python -m research.daily_live_forward_report
 ```
 
 ## Daily Launchd Schedule

@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -388,4 +389,36 @@ def _leader_text(value: object) -> str:
         f"wr={float(value.get('win_rate', 0.0) or 0.0):.1%} "
         f"avgR={float(value.get('avg_r', 0.0) or 0.0):.3f} "
         f"pf={_fmt_pf(value.get('profit_factor', 0.0))}"
+    )
+
+
+def format_daily_forward_report_message(report: Mapping[str, object]) -> str:
+    performance = _as_dict(report.get("performance"))
+    overall = _as_dict(performance.get("overall"))
+    feed = _as_dict(report.get("feed_quality"))
+    safe_mode = _as_dict(feed.get("safe_mode"))
+    leaders = _as_dict(report.get("leaders"))
+    recommendation = _as_dict(report.get("recommendation"))
+    window = _as_dict(report.get("window"))
+    action = str(recommendation.get("action", "UNKNOWN"))
+    icon = "✅" if feed.get("ok") and action in {"COLLECT_MORE_FORWARD_DATA", "KEEP_PROFILE", "HOLD_PROFILE"} else "⚠️"
+
+    return (
+        f"{icon} <b>SMC DAILY FORWARD REPORT</b>\n\n"
+        f"<b>Window:</b> {escape(str(window.get('recent_minutes', '-')))} min\n"
+        f"<b>Signals:</b> {int(overall.get('candidates', 0) or 0)} | "
+        f"<b>Delivered:</b> {int(overall.get('delivered', 0) or 0)} | "
+        f"<b>Closed:</b> {int(overall.get('closed_with_r', 0) or 0)}\n"
+        f"<b>WR:</b> {float(overall.get('win_rate', 0.0) or 0.0):.1%} | "
+        f"<b>AvgR:</b> {float(overall.get('avg_r', 0.0) or 0.0):.3f} | "
+        f"<b>PF:</b> {escape(_fmt_pf(overall.get('profit_factor', 0.0)))} | "
+        f"<b>DD:</b> {float(overall.get('max_drawdown_r', 0.0) or 0.0):.3f}R\n\n"
+        f"<b>Feed:</b> {'OK' if feed.get('ok') else 'ALERT'} | "
+        f"<b>Safe blocks:</b> {int(safe_mode.get('blocking_count', 0) or 0)}/{int(safe_mode.get('checks', 0) or 0)}\n"
+        f"<b>Safe latest:</b> {escape(str(safe_mode.get('latest_reason', '-')))}\n\n"
+        f"<b>Best pair:</b> {escape(_leader_text(leaders.get('best_pair')))}\n"
+        f"<b>Worst pair:</b> {escape(_leader_text(leaders.get('worst_pair')))}\n"
+        f"<b>Best regime:</b> {escape(_leader_text(leaders.get('best_regime')))}\n\n"
+        f"<b>Action:</b> {escape(action)}\n"
+        f"<b>Reason:</b> {escape(str(recommendation.get('reason', '-')))}"
     )

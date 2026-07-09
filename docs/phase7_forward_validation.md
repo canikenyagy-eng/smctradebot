@@ -21,6 +21,51 @@ The helper:
 - summarizes feed safe-mode, live health, and feed-quality components.
 - writes `reports/daily_live_forward_report.json`.
 
+## Telegram Summary
+
+Enable the compact Telegram summary after the daily report:
+
+```env
+DAILY_FORWARD_REPORT_SEND_TELEGRAM=1
+DAILY_FORWARD_REPORT_TELEGRAM_ON_NO_SIGNALS=1
+```
+
+Manual one-off Telegram send:
+
+```bash
+python -m research.daily_live_forward_report --telegram
+```
+
+Suppress Telegram for a manual diagnostic run:
+
+```bash
+python -m research.daily_live_forward_report --no-telegram
+```
+
+## Launchd Automation
+
+Install the post-session daily report job:
+
+```bash
+cd "/Users/kanannagiev/Documents/New project/project"
+bash launchd/install_forward_reports.sh
+```
+
+The job runs once per day at `21:30` local Mac time, about 30 minutes after the `07-16 UTC` live session ends on this machine.
+
+Check status:
+
+```bash
+launchctl list | grep com.smc.forwardreports
+```
+
+Inspect logs:
+
+```bash
+tail -f "$HOME/Library/Logs/SMCSignalEngine/forward-reports.out.log"
+tail -f logs/forward_reports_daily.out.log
+```
+
 ## Useful Options
 
 ```bash
