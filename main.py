@@ -13,6 +13,7 @@ from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient, MarketDataDiagnosticsConfig
 from execution.news import NewsFilter
 from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
+from services.itick_websocket_shadow import ItickWebSocketShadowClient, ItickWebSocketShadowSettings
 from services.live_health import LiveHeartbeatSettings, LiveHeartbeatWriter
 from services.live_telemetry import LiveTelemetryLogger, LiveTelemetrySettings
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
@@ -358,6 +359,7 @@ async def run_engine() -> None:
     shadow_logger: MarketDataShadowLogger | None = None
     shadow_engine: SignalEngine | None = None
     shadow_market_data: MarketDataClient | None = None
+    itick_websocket_shadow: ItickWebSocketShadowClient | None = None
     telemetry = LiveTelemetryLogger(
         LiveTelemetrySettings(
             enabled=settings.enable_live_telemetry,
@@ -418,6 +420,24 @@ async def run_engine() -> None:
                 live_mode=live_mode,
                 pair_profiles=pair_profiles,
             )
+    if settings.enable_itick_websocket_shadow:
+        itick_websocket_shadow = ItickWebSocketShadowClient(
+            ItickWebSocketShadowSettings(
+                enabled=True,
+                api_key=settings.itick_api_key,
+                url=settings.itick_websocket_url,
+                api_key_header=settings.itick_api_key_header,
+                auth_scheme=settings.itick_auth_scheme,
+                symbol_format=settings.itick_symbol_format,
+                region=settings.itick_websocket_region,
+                subscription_types=settings.itick_websocket_types,
+                log_path=settings.itick_websocket_log_path,
+                heartbeat_seconds=settings.itick_websocket_heartbeat_seconds,
+                reconnect_seconds=settings.itick_websocket_reconnect_seconds,
+                stale_seconds=settings.itick_websocket_stale_seconds,
+                max_latency_seconds=settings.itick_websocket_max_latency_seconds,
+            )
+        )
     telegram = TelegramSignalService(
         token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
@@ -427,7 +447,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s itick_ws_shadow=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -449,6 +469,7 @@ async def run_engine() -> None:
         settings.enable_market_data_freshness_gate,
         settings.max_live_candle_age_seconds,
         settings.enable_market_data_diagnostics,
+        settings.enable_itick_websocket_shadow,
     )
     telemetry.engine_started(
         pairs=live_pairs,
@@ -464,6 +485,8 @@ async def run_engine() -> None:
         live_mode=live_mode.name,
         scan_interval_minutes=settings.scan_interval_minutes,
     )
+    if itick_websocket_shadow is not None:
+        await itick_websocket_shadow.start(live_pairs)
 
     try:
         while True:
@@ -574,6 +597,8 @@ async def run_engine() -> None:
             sleep_for = max(1.0, settings.scan_interval_minutes * 60 - elapsed)
             await asyncio.sleep(sleep_for)
     finally:
+        if itick_websocket_shadow is not None:
+            await itick_websocket_shadow.stop()
         market_data.close()
         if shadow_market_data is not None:
             shadow_market_data.close()

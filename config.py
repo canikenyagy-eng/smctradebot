@@ -210,6 +210,16 @@ class Settings:
     market_data_shadow_compare_signals: bool
     market_data_shadow_max_close_diff_pips: float
     market_data_shadow_max_staleness_seconds: int
+    enable_itick_websocket_shadow: bool
+    itick_websocket_url: str
+    itick_websocket_region: str
+    itick_websocket_types: str
+    itick_websocket_log_path: str
+    itick_websocket_summary_path: str
+    itick_websocket_heartbeat_seconds: float
+    itick_websocket_reconnect_seconds: float
+    itick_websocket_stale_seconds: float
+    itick_websocket_max_latency_seconds: float
     enable_market_data_freshness_gate: bool
     max_live_candle_age_seconds: int
     enable_market_data_diagnostics: bool
@@ -512,6 +522,37 @@ class Settings:
             market_data_shadow_max_staleness_seconds=max(
                 1,
                 int(os.getenv("MARKET_DATA_SHADOW_MAX_STALENESS_SECONDS", "120")),
+            ),
+            enable_itick_websocket_shadow=_parse_bool(
+                os.getenv("ENABLE_ITICK_WEBSOCKET_SHADOW", "0"),
+                default=False,
+            ),
+            itick_websocket_url=os.getenv("ITICK_WEBSOCKET_URL", "wss://api.itick.org/forex").strip(),
+            itick_websocket_region=os.getenv("ITICK_WEBSOCKET_REGION", "GB").strip().upper(),
+            itick_websocket_types=os.getenv("ITICK_WEBSOCKET_TYPES", "quote").strip(),
+            itick_websocket_log_path=os.getenv(
+                "ITICK_WEBSOCKET_LOG_PATH",
+                "logs/itick_websocket_shadow.jsonl",
+            ).strip(),
+            itick_websocket_summary_path=os.getenv(
+                "ITICK_WEBSOCKET_SUMMARY_PATH",
+                "reports/itick_websocket_shadow_summary.json",
+            ).strip(),
+            itick_websocket_heartbeat_seconds=max(
+                5.0,
+                float(os.getenv("ITICK_WEBSOCKET_HEARTBEAT_SECONDS", "30")),
+            ),
+            itick_websocket_reconnect_seconds=max(
+                1.0,
+                float(os.getenv("ITICK_WEBSOCKET_RECONNECT_SECONDS", "5")),
+            ),
+            itick_websocket_stale_seconds=max(
+                1.0,
+                float(os.getenv("ITICK_WEBSOCKET_STALE_SECONDS", "5")),
+            ),
+            itick_websocket_max_latency_seconds=max(
+                0.1,
+                float(os.getenv("ITICK_WEBSOCKET_MAX_LATENCY_SECONDS", "2")),
             ),
             enable_market_data_freshness_gate=_parse_bool(
                 os.getenv("ENABLE_MARKET_DATA_FRESHNESS_GATE", "0"),

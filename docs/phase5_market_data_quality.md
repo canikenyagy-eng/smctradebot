@@ -114,4 +114,6 @@ data_freshness_gate=True/1800s data_diagnostics=True
 
 The freshness gate only affects live signal acceptance when `ENABLE_MARKET_DATA_FRESHNESS_GATE=1` and the signal engine runtime is `live`.
 
+For true live quote freshness validation, use the iTick WebSocket shadow workflow in `docs/phase5_itick_websocket_shadow.md`.
+
 Diagnostics are passive. They only write JSONL rows and summaries.

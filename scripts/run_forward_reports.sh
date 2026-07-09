@@ -20,6 +20,10 @@ cd "$PROJECT_DIR"
   "$PROJECT_DIR/.venv/bin/python" -m research.forward_performance_report --no-rows
   echo
   "$PROJECT_DIR/.venv/bin/python" -m research.market_data_diagnostics_report
+  if grep -q '^ENABLE_ITICK_WEBSOCKET_SHADOW=1' "$PROJECT_DIR/.env" 2>/dev/null; then
+    echo
+    "$PROJECT_DIR/.venv/bin/python" -m research.itick_websocket_shadow_report
+  fi
   echo "=== Forward reports finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   echo
 } >> "$REPORT_LOG" 2>&1
