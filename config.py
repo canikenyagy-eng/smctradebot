@@ -212,6 +212,12 @@ class Settings:
     market_data_shadow_max_staleness_seconds: int
     enable_market_data_freshness_gate: bool
     max_live_candle_age_seconds: int
+    enable_market_data_diagnostics: bool
+    market_data_diagnostics_log_path: str
+    market_data_diagnostics_max_latency_seconds: float
+    market_data_diagnostics_max_candle_age_seconds: int
+    market_data_diagnostics_log_cache_hits: bool
+    market_data_diagnostics_summary_path: str
     scan_interval_minutes: int
     enable_live_mode: bool
     live_mode: str
@@ -515,6 +521,30 @@ class Settings:
                 60,
                 int(os.getenv("MAX_LIVE_CANDLE_AGE_SECONDS", "1800")),
             ),
+            enable_market_data_diagnostics=_parse_bool(
+                os.getenv("ENABLE_MARKET_DATA_DIAGNOSTICS", "0"),
+                default=False,
+            ),
+            market_data_diagnostics_log_path=os.getenv(
+                "MARKET_DATA_DIAGNOSTICS_LOG_PATH",
+                "logs/market_data_diagnostics.jsonl",
+            ).strip(),
+            market_data_diagnostics_max_latency_seconds=max(
+                0.1,
+                float(os.getenv("MARKET_DATA_DIAGNOSTICS_MAX_LATENCY_SECONDS", "5.0")),
+            ),
+            market_data_diagnostics_max_candle_age_seconds=max(
+                60,
+                int(os.getenv("MARKET_DATA_DIAGNOSTICS_MAX_CANDLE_AGE_SECONDS", "1800")),
+            ),
+            market_data_diagnostics_log_cache_hits=_parse_bool(
+                os.getenv("MARKET_DATA_DIAGNOSTICS_LOG_CACHE_HITS", "1"),
+                default=True,
+            ),
+            market_data_diagnostics_summary_path=os.getenv(
+                "MARKET_DATA_DIAGNOSTICS_SUMMARY_PATH",
+                "reports/market_data_diagnostics_summary.json",
+            ).strip(),
             scan_interval_minutes=max(1, int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))),
             enable_live_mode=_parse_bool(os.getenv("ENABLE_LIVE_MODE", "0"), default=False),
             live_mode=os.getenv("LIVE_MODE", "balanced").strip().lower(),

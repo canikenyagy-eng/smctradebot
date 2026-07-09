@@ -841,7 +841,7 @@ class SignalEngine:
         now = datetime.now(timezone.utc)
         age_seconds = (now - timestamp).total_seconds()
         context = {
-            "pair": pair.upper().replace("/", ""),
+            "symbol": pair.upper().replace("/", ""),
             "trigger_timeframe": self.trigger_timeframe,
             "last_candle_time": timestamp.isoformat(),
             "age_seconds": round(age_seconds, 3),

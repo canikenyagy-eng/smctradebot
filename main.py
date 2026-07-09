@@ -10,7 +10,7 @@ from pathlib import Path
 from config import Settings
 from core.pair_profiles import PairRuntimeProfile, build_pair_runtime_profiles, clean_pair
 from core.signal_engine import SignalEngine
-from data.market_data import MarketDataCacheConfig, MarketDataClient
+from data.market_data import MarketDataCacheConfig, MarketDataClient, MarketDataDiagnosticsConfig
 from execution.news import NewsFilter
 from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
 from services.live_health import LiveHeartbeatSettings, LiveHeartbeatWriter
@@ -90,6 +90,13 @@ def _build_market_data(
             cache_dir=cache_dir or settings.market_data_cache_dir,
             ttl_hours=settings.market_data_cache_ttl_hours if ttl_hours is None else ttl_hours,
             mode=settings.market_data_cache_mode,
+        ),
+        diagnostics_config=MarketDataDiagnosticsConfig(
+            enabled=settings.enable_market_data_diagnostics,
+            log_path=settings.market_data_diagnostics_log_path,
+            max_latency_seconds=settings.market_data_diagnostics_max_latency_seconds,
+            max_candle_age_seconds=settings.market_data_diagnostics_max_candle_age_seconds,
+            log_cache_hits=settings.market_data_diagnostics_log_cache_hits,
         ),
     )
 
@@ -420,7 +427,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -439,6 +446,9 @@ async def run_engine() -> None:
         settings.pre_trade_block_expansion_continuation_fallback,
         settings.enable_forward_journal,
         settings.enable_live_heartbeat,
+        settings.enable_market_data_freshness_gate,
+        settings.max_live_candle_age_seconds,
+        settings.enable_market_data_diagnostics,
     )
     telemetry.engine_started(
         pairs=live_pairs,

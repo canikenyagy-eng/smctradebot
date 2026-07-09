@@ -18,6 +18,8 @@ cd "$PROJECT_DIR"
   "$PROJECT_DIR/.venv/bin/python" -m research.forward_outcome_tracker
   echo
   "$PROJECT_DIR/.venv/bin/python" -m research.forward_performance_report --no-rows
+  echo
+  "$PROJECT_DIR/.venv/bin/python" -m research.market_data_diagnostics_report
   echo "=== Forward reports finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   echo
 } >> "$REPORT_LOG" 2>&1
