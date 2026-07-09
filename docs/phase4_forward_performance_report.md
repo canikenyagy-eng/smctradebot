@@ -41,6 +41,37 @@ The helper writes a log to:
 logs/forward_reports_daily.out.log
 ```
 
+## Daily Launchd Schedule
+
+Install the daily report job:
+
+```bash
+cd "/Users/kanannagiev/Documents/New project/project"
+bash launchd/install_forward_reports.sh
+```
+
+The launch agent runs once per day at `21:30` local Mac time. On this Mac timezone, that is `16:30 UTC`, about 30 minutes after the live session window `07-16 UTC` ends.
+
+Check status:
+
+```bash
+launchctl list | grep com.smc.forwardreports
+```
+
+Uninstall:
+
+```bash
+cd "/Users/kanannagiev/Documents/New project/project"
+bash launchd/uninstall_forward_reports.sh
+```
+
+Launchd stdout/stderr logs:
+
+```bash
+tail -f "$HOME/Library/Logs/SMCSignalEngine/forward-reports.out.log"
+tail -f "$HOME/Library/Logs/SMCSignalEngine/forward-reports.err.log"
+```
+
 ## Recommended Workflow
 
 1. Run the live bot with forward journal enabled.

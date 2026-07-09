@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.smc.forwardreports</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>/Users/kanannagiev/Documents/New project/project/scripts/run_forward_reports.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kanannagiev/Documents/New project/project</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>21</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kanannagiev/Library/Logs/SMCSignalEngine/forward-reports.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kanannagiev/Library/Logs/SMCSignalEngine/forward-reports.err.log</string>
+</dict>
+</plist>
