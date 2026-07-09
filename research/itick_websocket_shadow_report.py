@@ -57,10 +57,12 @@ def print_report(report: Mapping[str, object]) -> None:
     print()
     print("ITICK WEBSOCKET SHADOW")
     print(
-        "Quotes: {quotes} | Stale: {stale} | Slow: {slow} | Errors: {errors} | LatestAge: {latest_age}s | Alert: {alert}".format(
+        "Quotes: {quotes} | Stale: {stale} ({stale_rate:.3%}) | Slow: {slow} ({slow_rate:.3%}) | Errors: {errors} | LatestAge: {latest_age}s | Alert: {alert}".format(
             quotes=int(overall.get("quotes", 0)),
             stale=int(overall.get("stale", 0)),
+            stale_rate=float(overall.get("stale_rate", 0.0)),
             slow=int(overall.get("slow", 0)),
+            slow_rate=float(overall.get("slow_rate", 0.0)),
             errors=int(overall.get("connection_errors", 0)),
             latest_age=_fmt(overall.get("latest_quote_age_seconds"), 3),
             alert=overall.get("alert", False),
@@ -96,6 +98,8 @@ def main() -> None:
         recent_minutes=args.recent_minutes,
         stale_seconds=settings.itick_websocket_stale_seconds,
         max_latency_seconds=settings.itick_websocket_max_latency_seconds,
+        max_stale_rate=settings.itick_websocket_max_stale_rate,
+        max_slow_rate=settings.itick_websocket_max_slow_rate,
         max_connection_errors=settings.itick_websocket_max_connection_errors,
         max_latest_quote_age_seconds=settings.itick_websocket_max_latest_quote_age_seconds,
     )

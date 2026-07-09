@@ -223,6 +223,8 @@ class Settings:
     itick_websocket_reconnect_jitter_seconds: float
     itick_websocket_stale_seconds: float
     itick_websocket_max_latency_seconds: float
+    itick_websocket_max_stale_rate: float
+    itick_websocket_max_slow_rate: float
     itick_websocket_max_connection_errors: int
     itick_websocket_max_latest_quote_age_seconds: float
     enable_live_bar_builder: bool
@@ -584,6 +586,14 @@ class Settings:
             itick_websocket_max_latency_seconds=max(
                 0.1,
                 float(os.getenv("ITICK_WEBSOCKET_MAX_LATENCY_SECONDS", "2")),
+            ),
+            itick_websocket_max_stale_rate=max(
+                0.0,
+                float(os.getenv("ITICK_WEBSOCKET_MAX_STALE_RATE", "0")),
+            ),
+            itick_websocket_max_slow_rate=max(
+                0.0,
+                float(os.getenv("ITICK_WEBSOCKET_MAX_SLOW_RATE", "0.005")),
             ),
             itick_websocket_max_connection_errors=max(
                 0,

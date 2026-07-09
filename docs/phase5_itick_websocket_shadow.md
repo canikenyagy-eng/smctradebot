@@ -22,6 +22,8 @@ ITICK_WEBSOCKET_RECONNECT_BACKOFF_FACTOR=2
 ITICK_WEBSOCKET_RECONNECT_JITTER_SECONDS=1
 ITICK_WEBSOCKET_STALE_SECONDS=5
 ITICK_WEBSOCKET_MAX_LATENCY_SECONDS=2
+ITICK_WEBSOCKET_MAX_STALE_RATE=0
+ITICK_WEBSOCKET_MAX_SLOW_RATE=0.005
 ITICK_WEBSOCKET_MAX_CONNECTION_ERRORS=3
 ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS=30
 ```
@@ -76,7 +78,8 @@ Use iTick as live-candle candidate only after several live sessions where:
 
 - WebSocket quote count is non-zero for all live pairs
 - p95 quote latency is below `2s`
-- stale quote rate is near `0%`
+- stale quote rate is at or below `ITICK_WEBSOCKET_MAX_STALE_RATE`
+- slow quote rate is at or below `ITICK_WEBSOCKET_MAX_SLOW_RATE`
 - reconnects/errors are rare
 - connection-error count stays below `ITICK_WEBSOCKET_MAX_CONNECTION_ERRORS` inside the report window
 - latest quote age stays below `ITICK_WEBSOCKET_MAX_LATEST_QUOTE_AGE_SECONDS`

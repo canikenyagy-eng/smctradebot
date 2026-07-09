@@ -405,6 +405,8 @@ class ItickWebSocketShadowReporter:
         recent_minutes: int = 1440,
         stale_seconds: float = 5.0,
         max_latency_seconds: float = 2.0,
+        max_stale_rate: float = 0.0,
+        max_slow_rate: float = 0.005,
         max_connection_errors: int = 3,
         max_latest_quote_age_seconds: float = 30.0,
     ) -> None:
@@ -413,6 +415,8 @@ class ItickWebSocketShadowReporter:
         self.recent_minutes = max(1, int(recent_minutes))
         self.stale_seconds = max(1.0, float(stale_seconds))
         self.max_latency_seconds = max(0.1, float(max_latency_seconds))
+        self.max_stale_rate = max(0.0, float(max_stale_rate))
+        self.max_slow_rate = max(0.0, float(max_slow_rate))
         self.max_connection_errors = max(0, int(max_connection_errors))
         self.max_latest_quote_age_seconds = max(1.0, float(max_latest_quote_age_seconds))
 
@@ -455,6 +459,8 @@ class ItickWebSocketShadowReporter:
                 "recent_minutes": self.recent_minutes,
                 "stale_seconds": self.stale_seconds,
                 "max_latency_seconds": self.max_latency_seconds,
+                "max_stale_rate": self.max_stale_rate,
+                "max_slow_rate": self.max_slow_rate,
                 "max_connection_errors": self.max_connection_errors,
                 "max_latest_quote_age_seconds": self.max_latest_quote_age_seconds,
             },
@@ -479,16 +485,20 @@ class ItickWebSocketShadowReporter:
         latencies = [value for row in row_list if (value := _as_float(row.get("latency_seconds"))) is not None]
         stale = [row for row in row_list if row.get("stale") is True or (_as_float(row.get("latency_seconds")) or 0.0) > self.stale_seconds]
         slow = [row for row in row_list if row.get("slow") is True or (_as_float(row.get("latency_seconds")) or 0.0) > self.max_latency_seconds]
+        stale_rate = len(stale) / len(row_list) if row_list else 0.0
+        slow_rate = len(slow) / len(row_list) if row_list else 0.0
         return {
             "quotes": len(row_list),
             "stale": len(stale),
             "slow": len(slow),
-            "stale_rate": round(len(stale) / len(row_list), 6) if row_list else 0.0,
-            "slow_rate": round(len(slow) / len(row_list), 6) if row_list else 0.0,
+            "stale_rate": round(stale_rate, 6),
+            "slow_rate": round(slow_rate, 6),
+            "max_stale_rate": self.max_stale_rate,
+            "max_slow_rate": self.max_slow_rate,
             "avg_latency_seconds": round(mean(latencies), 6) if latencies else 0.0,
             "p95_latency_seconds": round(_percentile(latencies, 0.95), 6) if latencies else 0.0,
             "max_latency_seconds": round(max(latencies), 6) if latencies else 0.0,
-            "alert": bool(stale or slow or not row_list),
+            "alert": bool(not row_list or stale_rate > self.max_stale_rate or slow_rate > self.max_slow_rate),
         }
 
     def _latest_by_pair(self, rows: Iterable[Mapping[str, object]]) -> dict[str, dict[str, object]]:
