@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 backtests/
 data/cache/
+data/live_bars/
 logs/*.log
 logs/*.jsonl
 logs/*.json

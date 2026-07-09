@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,13 @@ def read_jsonl(path: Path | str) -> list[dict[str, object]]:
 class ItickWebSocketShadowClient:
     """Streams iTick quotes for observability without feeding signal decisions."""
 
-    def __init__(self, settings: ItickWebSocketShadowSettings) -> None:
+    def __init__(
+        self,
+        settings: ItickWebSocketShadowSettings,
+        quote_consumers: Iterable[Callable[[Mapping[str, object]], None]] | None = None,
+    ) -> None:
         self.settings = settings.normalized()
+        self.quote_consumers = tuple(quote_consumers or ())
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
 
@@ -324,6 +329,11 @@ class ItickWebSocketShadowClient:
             "low": _as_float(data.get("l")),
             "volume": _as_float(data.get("v")),
         }
+        for consumer in self.quote_consumers:
+            try:
+                consumer(row)
+            except Exception as exc:
+                logger.warning("iTick WebSocket quote consumer failed: %s", exc)
         self._write_event(row, observed_at=observed_at)
 
     def _write_event(self, payload: dict[str, object], *, observed_at: datetime | None = None) -> None:

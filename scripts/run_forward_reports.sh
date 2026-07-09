@@ -24,6 +24,10 @@ cd "$PROJECT_DIR"
     echo
     "$PROJECT_DIR/.venv/bin/python" -m research.itick_websocket_shadow_report
   fi
+  if grep -q '^ENABLE_LIVE_BAR_BUILDER=1' "$PROJECT_DIR/.env" 2>/dev/null; then
+    echo
+    "$PROJECT_DIR/.venv/bin/python" -m research.live_bar_builder_report
+  fi
   echo "=== Forward reports finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   echo
 } >> "$REPORT_LOG" 2>&1

@@ -14,6 +14,7 @@ from data.market_data import MarketDataCacheConfig, MarketDataClient, MarketData
 from execution.news import NewsFilter
 from services.forward_journal import ForwardJournalSettings, ForwardSignalJournal
 from services.itick_websocket_shadow import ItickWebSocketShadowClient, ItickWebSocketShadowSettings
+from services.live_bar_builder import LiveBarBuilder, LiveBarBuilderSettings
 from services.live_health import LiveHeartbeatSettings, LiveHeartbeatWriter
 from services.live_telemetry import LiveTelemetryLogger, LiveTelemetrySettings
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
@@ -360,6 +361,7 @@ async def run_engine() -> None:
     shadow_engine: SignalEngine | None = None
     shadow_market_data: MarketDataClient | None = None
     itick_websocket_shadow: ItickWebSocketShadowClient | None = None
+    live_bar_builder: LiveBarBuilder | None = None
     telemetry = LiveTelemetryLogger(
         LiveTelemetrySettings(
             enabled=settings.enable_live_telemetry,
@@ -420,7 +422,20 @@ async def run_engine() -> None:
                 live_mode=live_mode,
                 pair_profiles=pair_profiles,
             )
-    if settings.enable_itick_websocket_shadow:
+    if settings.enable_live_bar_builder:
+        live_bar_builder = LiveBarBuilder(
+            LiveBarBuilderSettings(
+                enabled=True,
+                source="itick_websocket",
+                timeframes=tuple(settings.live_bar_builder_timeframes),
+                bars_dir=settings.live_bar_builder_dir,
+                log_path=settings.live_bar_builder_log_path,
+                max_bars_per_timeframe=settings.live_bar_builder_max_bars,
+                flush_interval_seconds=settings.live_bar_builder_flush_seconds,
+                max_quote_age_seconds=settings.live_bar_builder_max_quote_age_seconds,
+            )
+        )
+    if settings.enable_itick_websocket_shadow or settings.enable_live_bar_builder:
         itick_websocket_shadow = ItickWebSocketShadowClient(
             ItickWebSocketShadowSettings(
                 enabled=True,
@@ -436,7 +451,8 @@ async def run_engine() -> None:
                 reconnect_seconds=settings.itick_websocket_reconnect_seconds,
                 stale_seconds=settings.itick_websocket_stale_seconds,
                 max_latency_seconds=settings.itick_websocket_max_latency_seconds,
-            )
+            ),
+            quote_consumers=[live_bar_builder.on_quote] if live_bar_builder is not None else None,
         )
     telegram = TelegramSignalService(
         token=settings.telegram_bot_token,
@@ -447,7 +463,7 @@ async def run_engine() -> None:
 
     logger = logging.getLogger("engine")
     logger.info(
-        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s itick_ws_shadow=%s",
+        "Started signal engine for pairs: %s | live_profile=%s enabled=%s vol_rr=%s/%s/%s liq_trail=%s | live_mode=%s enabled=%s min_score=%s session=%s regime_block=%s pair_profiles=%s pre_trade_shadow=%s/%s/%s forward_journal=%s heartbeat=%s data_freshness_gate=%s/%ss data_diagnostics=%s itick_ws_shadow=%s live_bar_builder=%s",
         ", ".join(live_pairs),
         settings.exit_profile_preset,
         settings.enable_exit_engine,
@@ -470,6 +486,7 @@ async def run_engine() -> None:
         settings.max_live_candle_age_seconds,
         settings.enable_market_data_diagnostics,
         settings.enable_itick_websocket_shadow,
+        settings.enable_live_bar_builder,
     )
     telemetry.engine_started(
         pairs=live_pairs,
@@ -599,6 +616,8 @@ async def run_engine() -> None:
     finally:
         if itick_websocket_shadow is not None:
             await itick_websocket_shadow.stop()
+        if live_bar_builder is not None:
+            live_bar_builder.flush()
         market_data.close()
         if shadow_market_data is not None:
             shadow_market_data.close()

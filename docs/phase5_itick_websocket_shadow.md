@@ -77,6 +77,45 @@ Use iTick as live-candle candidate only after several live sessions where:
 
 If iTick passes, the next step is a separate `LiveBarBuilder` that builds M5/M15/H1 candles from WebSocket quotes.
 
+## LiveBarBuilder Shadow
+
+After WebSocket quotes are stable, enable local OHLCV construction:
+
+```env
+ENABLE_LIVE_BAR_BUILDER=1
+LIVE_BAR_BUILDER_TIMEFRAMES=M5,M15,H1
+LIVE_BAR_BUILDER_DIR=data/live_bars/itick
+LIVE_BAR_BUILDER_LOG_PATH=logs/live_bars_itick.jsonl
+LIVE_BAR_BUILDER_SUMMARY_PATH=reports/live_bar_builder_summary.json
+LIVE_BAR_BUILDER_MAX_BARS=1000
+LIVE_BAR_BUILDER_FLUSH_SECONDS=2
+LIVE_BAR_BUILDER_MAX_QUOTE_AGE_SECONDS=5
+```
+
+This still does not change live signal generation. It only builds local bars from iTick quotes.
+
+Run a controlled probe:
+
+```bash
+python -m research.live_bar_builder_probe \
+  --pairs EURUSD,EURJPY,CADJPY \
+  --seconds 60
+```
+
+Summarize generated bars:
+
+```bash
+python -m research.live_bar_builder_report --recent-minutes 60
+```
+
+Generated CSV bars are written to:
+
+```text
+data/live_bars/itick/
+```
+
+The next migration step is a dedicated live-bar market data provider that can read these files and replace Yahoo only after bar freshness is stable.
+
 ## Troubleshooting
 
 `server rejected WebSocket connection: HTTP 401` means the WebSocket cluster rejected authentication. Check that:

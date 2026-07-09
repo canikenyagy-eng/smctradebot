@@ -220,6 +220,14 @@ class Settings:
     itick_websocket_reconnect_seconds: float
     itick_websocket_stale_seconds: float
     itick_websocket_max_latency_seconds: float
+    enable_live_bar_builder: bool
+    live_bar_builder_timeframes: List[str]
+    live_bar_builder_dir: str
+    live_bar_builder_log_path: str
+    live_bar_builder_summary_path: str
+    live_bar_builder_max_bars: int
+    live_bar_builder_flush_seconds: float
+    live_bar_builder_max_quote_age_seconds: float
     enable_market_data_freshness_gate: bool
     max_live_candle_age_seconds: int
     enable_market_data_diagnostics: bool
@@ -553,6 +561,23 @@ class Settings:
             itick_websocket_max_latency_seconds=max(
                 0.1,
                 float(os.getenv("ITICK_WEBSOCKET_MAX_LATENCY_SECONDS", "2")),
+            ),
+            enable_live_bar_builder=_parse_bool(os.getenv("ENABLE_LIVE_BAR_BUILDER", "0"), default=False),
+            live_bar_builder_timeframes=_parse_csv_upper(os.getenv("LIVE_BAR_BUILDER_TIMEFRAMES", "M5,M15,H1")),
+            live_bar_builder_dir=os.getenv("LIVE_BAR_BUILDER_DIR", "data/live_bars/itick").strip(),
+            live_bar_builder_log_path=os.getenv("LIVE_BAR_BUILDER_LOG_PATH", "logs/live_bars_itick.jsonl").strip(),
+            live_bar_builder_summary_path=os.getenv(
+                "LIVE_BAR_BUILDER_SUMMARY_PATH",
+                "reports/live_bar_builder_summary.json",
+            ).strip(),
+            live_bar_builder_max_bars=max(100, int(os.getenv("LIVE_BAR_BUILDER_MAX_BARS", "1000"))),
+            live_bar_builder_flush_seconds=max(
+                0.25,
+                float(os.getenv("LIVE_BAR_BUILDER_FLUSH_SECONDS", "2")),
+            ),
+            live_bar_builder_max_quote_age_seconds=max(
+                1.0,
+                float(os.getenv("LIVE_BAR_BUILDER_MAX_QUOTE_AGE_SECONDS", "5")),
             ),
             enable_market_data_freshness_gate=_parse_bool(
                 os.getenv("ENABLE_MARKET_DATA_FRESHNESS_GATE", "0"),
