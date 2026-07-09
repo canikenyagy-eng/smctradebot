@@ -61,3 +61,13 @@ Each delivery event includes:
 ## Notes
 
 This is a raw forward-test journal. Repeated signal fingerprints may appear across cycles if the live engine keeps seeing the same setup. Outcome tracking should use `journal_id` for individual candidates and `fingerprint` for duplicate/group analysis.
+
+## Outcome Tracking
+
+After signals have had enough time to play out, run:
+
+```bash
+python -m research.forward_outcome_tracker
+```
+
+See `docs/phase4_outcome_tracker.md` for outcome statuses and tracker options.

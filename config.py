@@ -351,6 +351,15 @@ class Settings:
     enable_forward_journal: bool
     forward_journal_log_path: str
     forward_journal_include_score_breakdown: bool
+    enable_forward_outcome_tracker: bool
+    forward_outcome_log_path: str
+    forward_outcome_summary_path: str
+    forward_outcome_timeframe: str
+    forward_outcome_history_limit: int
+    forward_outcome_sent_only: bool
+    forward_outcome_max_hold_bars: int
+    forward_outcome_entry_expiry_bars: int
+    forward_outcome_ambiguous_policy: str
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -678,6 +687,24 @@ class Settings:
                 os.getenv("FORWARD_JOURNAL_INCLUDE_SCORE_BREAKDOWN", "1"),
                 default=True,
             ),
+            enable_forward_outcome_tracker=_parse_bool(
+                os.getenv("ENABLE_FORWARD_OUTCOME_TRACKER", "0"),
+                default=False,
+            ),
+            forward_outcome_log_path=os.getenv("FORWARD_OUTCOME_LOG_PATH", "logs/forward_outcomes.jsonl").strip(),
+            forward_outcome_summary_path=os.getenv(
+                "FORWARD_OUTCOME_SUMMARY_PATH",
+                "reports/forward_outcomes_summary.json",
+            ).strip(),
+            forward_outcome_timeframe=os.getenv("FORWARD_OUTCOME_TIMEFRAME", "M15").strip().upper(),
+            forward_outcome_history_limit=max(50, int(os.getenv("FORWARD_OUTCOME_HISTORY_LIMIT", "1500"))),
+            forward_outcome_sent_only=_parse_bool(os.getenv("FORWARD_OUTCOME_SENT_ONLY", "0"), default=False),
+            forward_outcome_max_hold_bars=max(1, int(os.getenv("FORWARD_OUTCOME_MAX_HOLD_BARS", "48"))),
+            forward_outcome_entry_expiry_bars=max(0, int(os.getenv("FORWARD_OUTCOME_ENTRY_EXPIRY_BARS", "0"))),
+            forward_outcome_ambiguous_policy=os.getenv(
+                "FORWARD_OUTCOME_AMBIGUOUS_POLICY",
+                "ambiguous",
+            ).strip().lower(),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,
