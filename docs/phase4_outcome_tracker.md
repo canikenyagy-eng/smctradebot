@@ -103,3 +103,13 @@ reports/forward_outcomes_summary.json
 ## Notes
 
 The tracker uses `static_tp_sl_time_stop_v1`. It intentionally does not model partial exits, trailing stops, or break-even movement yet. That keeps the first forward labels conservative and easy to audit.
+
+## Performance Report
+
+After outcomes have been written, generate grouped forward analytics:
+
+```bash
+python -m research.forward_performance_report
+```
+
+See `docs/phase4_forward_performance_report.md` for grouped metrics and options.

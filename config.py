@@ -360,6 +360,11 @@ class Settings:
     forward_outcome_max_hold_bars: int
     forward_outcome_entry_expiry_bars: int
     forward_outcome_ambiguous_policy: str
+    enable_forward_performance_report: bool
+    forward_performance_report_path: str
+    forward_performance_sent_only: bool
+    forward_performance_score_bucket_size: int
+    forward_performance_min_closed_trades: int
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -705,6 +710,26 @@ class Settings:
                 "FORWARD_OUTCOME_AMBIGUOUS_POLICY",
                 "ambiguous",
             ).strip().lower(),
+            enable_forward_performance_report=_parse_bool(
+                os.getenv("ENABLE_FORWARD_PERFORMANCE_REPORT", "0"),
+                default=False,
+            ),
+            forward_performance_report_path=os.getenv(
+                "FORWARD_PERFORMANCE_REPORT_PATH",
+                "reports/forward_performance_report.json",
+            ).strip(),
+            forward_performance_sent_only=_parse_bool(
+                os.getenv("FORWARD_PERFORMANCE_SENT_ONLY", "0"),
+                default=False,
+            ),
+            forward_performance_score_bucket_size=max(
+                1,
+                int(os.getenv("FORWARD_PERFORMANCE_SCORE_BUCKET_SIZE", "5")),
+            ),
+            forward_performance_min_closed_trades=max(
+                0,
+                int(os.getenv("FORWARD_PERFORMANCE_MIN_CLOSED_TRADES", "0")),
+            ),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,
