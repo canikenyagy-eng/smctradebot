@@ -345,6 +345,9 @@ class Settings:
     enable_pre_trade_filter: bool
     enable_pre_trade_filter_shadow: bool
     pre_trade_filter_shadow_log_path: str
+    enable_live_telemetry: bool
+    live_telemetry_log_path: str
+    live_telemetry_include_signal_details: bool
     pre_trade_block_expansion_continuation: bool
     pre_trade_block_expansion_continuation_fallback: bool
     prop_base_risk: float
@@ -660,6 +663,12 @@ class Settings:
                 "PRE_TRADE_FILTER_SHADOW_LOG_PATH",
                 "logs/pre_trade_filter_shadow.jsonl",
             ).strip(),
+            enable_live_telemetry=_parse_bool(os.getenv("ENABLE_LIVE_TELEMETRY", "0"), default=False),
+            live_telemetry_log_path=os.getenv("LIVE_TELEMETRY_LOG_PATH", "logs/live_telemetry.jsonl").strip(),
+            live_telemetry_include_signal_details=_parse_bool(
+                os.getenv("LIVE_TELEMETRY_INCLUDE_SIGNAL_DETAILS", "1"),
+                default=True,
+            ),
             pre_trade_block_expansion_continuation=_parse_bool(
                 os.getenv("PRE_TRADE_BLOCK_EXPANSION_CONTINUATION", "0"),
                 default=False,

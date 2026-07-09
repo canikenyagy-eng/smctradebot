@@ -11,6 +11,7 @@ from core.pair_profiles import PairRuntimeProfile, build_pair_runtime_profiles, 
 from core.signal_engine import SignalEngine
 from data.market_data import MarketDataCacheConfig, MarketDataClient
 from execution.news import NewsFilter
+from services.live_telemetry import LiveTelemetryLogger, LiveTelemetrySettings
 from services.market_data_shadow import MarketDataShadowLogger, MarketDataShadowSettings
 from services.pretrade_shadow import PreTradeShadowLogger, PreTradeShadowSettings
 from services.telegram import TelegramSignalService
@@ -347,6 +348,13 @@ async def run_engine() -> None:
     shadow_logger: MarketDataShadowLogger | None = None
     shadow_engine: SignalEngine | None = None
     shadow_market_data: MarketDataClient | None = None
+    telemetry = LiveTelemetryLogger(
+        LiveTelemetrySettings(
+            enabled=settings.enable_live_telemetry,
+            log_path=settings.live_telemetry_log_path,
+            include_signal_details=settings.live_telemetry_include_signal_details,
+        )
+    )
     pre_trade_shadow: PreTradeShadowLogger | None = None
     if settings.enable_pre_trade_filter_shadow:
         pre_trade_shadow = PreTradeShadowLogger(
@@ -414,17 +422,46 @@ async def run_engine() -> None:
         settings.pre_trade_block_expansion_continuation,
         settings.pre_trade_block_expansion_continuation_fallback,
     )
+    telemetry.engine_started(
+        pairs=live_pairs,
+        data_source=settings.data_source,
+        live_mode=live_mode.name,
+        scan_interval_minutes=settings.scan_interval_minutes,
+        exit_profile=settings.exit_profile_preset,
+        pre_trade_shadow_enabled=settings.enable_pre_trade_filter_shadow,
+    )
 
     try:
         while True:
             cycle_started = time.monotonic()
-            signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
+            cycle_id = telemetry.next_cycle_id()
+            telemetry.scan_started(cycle_id=cycle_id, pairs=live_pairs)
+            try:
+                signals = await asyncio.to_thread(engine.scan_pairs, live_pairs)
+            except Exception as exc:
+                telemetry.scan_failed(
+                    cycle_id=cycle_id,
+                    duration_seconds=time.monotonic() - cycle_started,
+                    error=exc,
+                )
+                raise
+
+            telemetry.signals_found(cycle_id=cycle_id, signals=signals)
+            pre_trade_shadow_rows: list[dict[str, object]] = []
             if pre_trade_shadow is not None:
-                await asyncio.to_thread(pre_trade_shadow.evaluate_signals, signals)
+                pre_trade_shadow_rows = await asyncio.to_thread(pre_trade_shadow.evaluate_signals, signals)
+                telemetry.pre_trade_shadow_summary(cycle_id=cycle_id, rows=pre_trade_shadow_rows)
 
             sent_count = 0
             for signal in signals:
+                send_started = time.monotonic()
                 delivered = await telegram.send_signal(signal)
+                telemetry.telegram_delivery(
+                    cycle_id=cycle_id,
+                    signal=signal,
+                    delivered=delivered,
+                    latency_seconds=time.monotonic() - send_started,
+                )
                 if delivered:
                     sent_count += 1
 
@@ -433,6 +470,14 @@ async def run_engine() -> None:
                 len(signals),
                 sent_count,
                 len(live_pairs),
+            )
+            telemetry.scan_completed(
+                cycle_id=cycle_id,
+                duration_seconds=time.monotonic() - cycle_started,
+                pair_count=len(live_pairs),
+                found_count=len(signals),
+                sent_count=sent_count,
+                shadow_would_block_count=sum(1 for row in pre_trade_shadow_rows if row.get("would_block")),
             )
             if shadow_logger is not None:
                 try:
