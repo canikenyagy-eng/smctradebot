@@ -49,6 +49,14 @@ def build_market_data(settings: Settings, *, data_source: str | None, history_li
         cache_enabled = False
         cache_mode = "disabled"
 
+    live_bar_config = _live_bar_config_from_settings(settings)
+    live_bar_config["require_live_overlay"] = False
+
+    redundant_config = _redundant_config_from_settings(settings)
+    nested_live_bar_config = redundant_config.get("live_bar_config")
+    if isinstance(nested_live_bar_config, dict):
+        nested_live_bar_config["require_live_overlay"] = False
+
     return MarketDataClient(
         history_limit=max(settings.history_limit, history_limit),
         data_source=source,
@@ -57,8 +65,8 @@ def build_market_data(settings: Settings, *, data_source: str | None, history_li
         mt5_server=settings.mt5_server,
         mt5_path=settings.mt5_path,
         itick_config=_itick_config_from_settings(settings),
-        live_bar_config=_live_bar_config_from_settings(settings),
-        redundant_config=_redundant_config_from_settings(settings),
+        live_bar_config=live_bar_config,
+        redundant_config=redundant_config,
         cache_config=MarketDataCacheConfig(
             enabled=cache_enabled,
             cache_dir=settings.market_data_cache_dir,

@@ -7,8 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/zsh</string>
-        <string>/Users/kanannagiev/Documents/New project/project/scripts/run_forward_reports.sh</string>
+        <string>/Users/kanannagiev/Documents/New project/project/.venv/bin/python</string>
+        <string>-m</string>
+        <string>research.daily_live_forward_report</string>
     </array>
 
     <key>WorkingDirectory</key>
