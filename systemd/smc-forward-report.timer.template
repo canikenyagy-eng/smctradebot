@@ -1,0 +1,11 @@
+[Unit]
+Description=Run SMC daily live forward report
+
+[Timer]
+OnCalendar={{FORWARD_REPORT_ONCALENDAR}}
+AccuracySec=1min
+Persistent=true
+Unit=smc-forward-report.service
+
+[Install]
+WantedBy=timers.target

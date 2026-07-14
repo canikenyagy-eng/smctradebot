@@ -1,0 +1,19 @@
+[Unit]
+Description=SMC daily live forward report
+Documentation=file:{{APP_DIR}}/docs/vps_deployment.md
+After=network-online.target smc-signal-engine.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{APP_USER}}
+Group={{APP_GROUP}}
+WorkingDirectory={{APP_DIR}}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{APP_DIR}}/.venv/bin/python -m research.daily_live_forward_report
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths={{APP_DIR}}

@@ -1,0 +1,19 @@
+[Unit]
+Description=SMC Signal Engine health check
+Documentation=file:{{APP_DIR}}/docs/vps_deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{APP_USER}}
+Group={{APP_GROUP}}
+WorkingDirectory={{APP_DIR}}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{APP_DIR}}/.venv/bin/python -m research.live_health_check --alert --output logs/live_health_status.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths={{APP_DIR}}
